@@ -234,7 +234,24 @@ svg{stroke-linecap:round;stroke-linejoin:round}
   border:1px solid var(--line);color:var(--text-2);font-size:10px;font-weight:600}
 .pill.on{color:var(--green);background:var(--green-dim);border-color:transparent}
 .pill.warn{color:var(--amber);background:var(--amber-dim);border-color:transparent}
+.pill.info{color:var(--blue);background:var(--blue-dim);border-color:transparent}
+.pill.lock{color:var(--amber);background:var(--amber-dim);border-color:transparent}
+.pill.disguise{color:var(--violet);background:var(--violet-dim);border-color:transparent}
 .pill.off{color:var(--text-3)}
+/* inline masked access address with copy + reveal */
+.node-addr{display:flex;align-items:center;gap:8px;margin:14px 0 2px;padding:8px 8px 8px 12px;
+  background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:var(--r-xs)}
+.node-addr .addr-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-2);letter-spacing:.02em}
+.node-addr .addr-text[data-shown="1"]{color:var(--accent)}
+.node-addr .addr-reveal{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;
+  color:var(--text-3);flex-shrink:0}
+.node-addr .addr-reveal:hover{color:var(--text);background:var(--surface-2)}
+.node-addr .addr-copy{flex-shrink:0;padding:6px 12px;font-size:11px}
+/* test button reflects latency after a probe */
+.node-actions .test-node.good{color:var(--green);border-color:rgba(55,214,122,.4)}
+.node-actions .test-node.warn{color:var(--amber);border-color:rgba(255,180,84,.4)}
+.node-actions .test-node.bad{color:var(--red);border-color:rgba(255,95,109,.4)}
 .node-meta{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:17px 0}
 .node-meta div{padding:11px;background:rgba(255,255,255,.025);border-radius:var(--r-xs);border:1px solid var(--line)}
 .node-meta small,.node-meta strong{display:block}
