@@ -82,7 +82,7 @@
       <label class="full">Emby 上游地址<textarea id="upstreams" placeholder="https://emby-origin.example.com"></textarea><small>填写真实 Emby 地址；有备用线路时换行填写。若连接 Toolbox 通用网关，请粘贴包含 URL 密钥及 /http/ 或 /https/ 的完整网关地址。</small></label>
       <label>连接密码保护<select id="access-mode"><option value="key">开启（推荐，防止他人盗用）</option><option value="alias_only">关闭（知道短路径即可访问）</option></select><small>开启后密码会成为客户端地址的一部分。</small></label>
       <label>自定义连接密码<input id="access-key" autocomplete="off" minlength="8" maxlength="64" pattern="[A-Za-z0-9_-]{8,64}" placeholder="留空则安全随机生成"><small>可填写 8–64 位字母、数字、下划线或连字符；创建后仍可查看。</small></label>
-      <label>遇到 302 播放跳转时<select id="direct-stream"><option value="false">由本机中转（隐私优先）</option><option value="true">让客户端直连（更快、省流量）</option></select><small>不确定时保持“由本机中转”。</small></label>
+      <label>遇到 302 播放跳转时<select id="direct-stream"><option value="false">由本机中转（隐私优先）</option><option value="true">让客户端直连（省流量，仅限可直连的网盘/CDN 直链）</option></select><small>“客户端直连”会把跳转目标地址交给客户端自己去连。只有当该目标（如 115/123 网盘直链）在客户端网络下能直接访问时才可用；若源站被墙、需要代理才能访问，直连会因客户端连不到目标而无法启播——这种情况请保持“由本机中转”。</small></label>
     </div>
     <details class="advanced-settings"><summary>高级设置 <span>一般保持默认即可</span></summary>
       <div class="form-grid">
