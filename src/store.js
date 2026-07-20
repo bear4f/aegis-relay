@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-const EMPTY = { version: 1, admin: null, routes: [], audit: [] };
+const EMPTY = { version: 1, admin: null, routes: [], audit: [], sessions: {} };
 
 export class Store {
   constructor(file, key) { this.file = file; this.key = key; this.data = structuredClone(EMPTY); this.load(); }

@@ -15,6 +15,22 @@ const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k])
 const safeMethod = method => method === 'GET' || method === 'HEAD';
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+export function stripAdminCredentials(headers) {
+  delete headers['x-csrf-token'];
+  if (!headers.cookie) return headers;
+  const cookies=String(headers.cookie).split(';').map(value=>value.trim()).filter(Boolean).filter(value=>!value.toLowerCase().startsWith('aegis_session='));
+  if(cookies.length)headers.cookie=cookies.join('; ');else delete headers.cookie;
+  return headers;
+}
+
+export function stripAdminSetCookies(headers) {
+  const current=headers['set-cookie'];
+  if(!current)return headers;
+  const safe=(Array.isArray(current)?current:[current]).filter(value=>!/^\s*aegis_session=/i.test(String(value)));
+  if(!safe.length)delete headers['set-cookie'];else headers['set-cookie']=safe;
+  return headers;
+}
+
 export function parseUpstreamList(value) {
   const values = (Array.isArray(value) ? value : String(value || '').split(/[;\n]+/)).map(v => String(v).trim()).filter(Boolean);
   if (!values.length) throw new Error('at least one upstream is required');
@@ -123,13 +139,13 @@ function externalRedirectPath(location, base) {
 
 function cleanResponseHeaders(input) {
   const out=strip(input); delete out.server; delete out.via; delete out['x-powered-by'];
-  out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
+  stripAdminSetCookies(out);out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
 }
 
 export function makeProxyHandler(store, key, metrics = null) {
   return async (req, res) => {
     const incoming=new URL(req.url,'http://relay.invalid');
-    if (req.method==='GET' && (incoming.pathname==='/' || incoming.pathname==='/index.html')) {
+    if (req.method==='GET' && (incoming.pathname==='/' || incoming.pathname==='/index.html' || incoming.pathname==='/gateway' || incoming.pathname==='/gateway/')) {
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" });
       return res.end(publicIndex(store.data.routes));
     }
@@ -139,7 +155,7 @@ export function makeProxyHandler(store, key, metrics = null) {
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
-    const originalHeaders=strip(req.headers); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; applyClientProfile(originalHeaders,route.clientProfile);
+    const originalHeaders=stripAdminCredentials(strip(req.headers)); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
     const attempt=(targetValue,index,redirects=0,redirectFrom=null)=>{
@@ -177,7 +193,7 @@ export function makeProxyHandler(store, key, metrics = null) {
 export function handleUpgrade(req, socket, head, store, key) {
   const found=routeFor(req,store.data.routes,key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), headers=strip(req.headers);
+  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; applyClientProfile(headers,found.route.clientProfile);
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;

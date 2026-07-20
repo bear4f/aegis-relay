@@ -61,7 +61,7 @@
 
       <section id="notifications-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">KEEPALIVE REMINDERS</span><h2>通知提醒</h2><p>通过 Telegram Bot 推送节点保号周期提醒；Bot Token 加密存储且不会回显。</p></div></div><div class="dashboard-grid"><article class="panel"><div class="panel-head"><div><span class="eyebrow">TELEGRAM</span><h3>机器人设置</h3></div><span id="telegram-state" class="pill">未配置</span></div><div class="form-grid"><label>Bot Token<input id="telegram-token" type="password" placeholder="仅设置或轮换时填写"></label><label>Chat ID<input id="telegram-chat" placeholder="个人或群组 Chat ID"></label><label class="full switch-row"><span>启用定时提醒</span><input id="telegram-enabled" type="checkbox"></label></div><div class="inline-actions"><button id="save-notifications" class="btn primary">保存设置</button><button id="test-notifications" class="btn ghost">发送测试消息</button></div></article><article class="panel"><span class="eyebrow">HOW IT WORKS</span><h3>提醒规则</h3><p class="muted">在节点编辑器中填写保号周期。达到周期后每天最多提醒一次；完成维护后在节点卡片点击“已保号”，周期会重新计算。</p><p class="muted">通知失败不会影响代理请求，也不会把 Bot Token 写入日志。</p></article></div></section>
 
-      <section id="deployment-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">HTTPS HANDOFF</span><h2>部署向导</h2><p>从临时公网端口过渡到 Nginx + HTTPS，并关闭管理端口公网访问。</p></div></div><div id="deployment-status" class="deploy-grid"></div><article class="panel guide"><ol><li><b>临时初始化</b><p>安装后通过 <code>http://服务器IP:9080/随机管理路径</code> 完成管理员与 2FA 设置。</p></li><li><b>域名解析</b><p>把域名 A/AAAA 记录指向当前服务器，确认 80/443 可访问。</p></li><li><b>执行 HTTPS 收口</b><pre>sudo aegis-relay domain example.com admin@example.com</pre></li><li><b>最终状态</b><p>脚本签发证书、启用自动续期、把 9080 重新绑定至 127.0.0.1，并只保留 HTTPS 入口。</p></li></ol></article></section>
+      <section id="deployment-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">HTTPS HANDOFF</span><h2>部署向导</h2><p>从临时公网端口过渡到 Nginx + HTTPS，并关闭管理端口公网访问。</p></div></div><div id="deployment-status" class="deploy-grid"></div><article class="panel guide"><ol><li><b>临时初始化</b><p>安装后通过 <code>http://服务器IP:9080/随机管理路径</code> 完成管理员与 2FA 设置。</p></li><li><b>域名解析</b><p>把域名 A/AAAA 记录指向当前服务器，确认 80/443 可访问。</p></li><li><b>执行 HTTPS 收口</b><pre>sudo aegis-relay domain example.com admin@example.com</pre></li><li><b>最终状态</b><p>脚本签发证书、启用自动续期、把 9080 重新绑定至 127.0.0.1；之后直接打开 HTTPS 域名根地址即可进入管理面板。</p></li></ol></article></section>
     </main>
 
     <nav class="mobile-bar"><div class="mobile-bar-inner">
@@ -80,7 +80,8 @@
       <label>节点名称<input id="name" placeholder="例如：家庭媒体库"><small>只在管理面板中用于区分节点。</small></label>
       <label>客户端短路径<input id="alias" placeholder="例如：home"><small>客户端地址中简短易记的一段。</small></label>
       <label class="full">Emby 上游地址<textarea id="upstreams" placeholder="https://emby-origin.example.com"></textarea><small>填写真实 Emby 地址；有备用线路时换行填写。若连接 Toolbox 通用网关，请粘贴包含 URL 密钥及 /http/ 或 /https/ 的完整网关地址。</small></label>
-      <label>连接密码<select id="access-mode"><option value="key">开启（推荐，防止他人盗用）</option><option value="alias_only">关闭（知道短路径即可访问）</option></select><small>开启后自动生成密码，管理员可随时查看完整地址。</small></label>
+      <label>连接密码保护<select id="access-mode"><option value="key">开启（推荐，防止他人盗用）</option><option value="alias_only">关闭（知道短路径即可访问）</option></select><small>开启后密码会成为客户端地址的一部分。</small></label>
+      <label>自定义连接密码<input id="access-key" autocomplete="off" minlength="8" maxlength="64" pattern="[A-Za-z0-9_-]{8,64}" placeholder="留空则安全随机生成"><small>可填写 8–64 位字母、数字、下划线或连字符；创建后仍可查看。</small></label>
       <label>遇到 302 播放跳转时<select id="direct-stream"><option value="false">由本机中转（隐私优先）</option><option value="true">让客户端直连（更快、省流量）</option></select><small>不确定时保持“由本机中转”。</small></label>
     </div>
     <details class="advanced-settings"><summary>高级设置 <span>一般保持默认即可</span></summary>
@@ -88,7 +89,7 @@
         <label class="full">播放专用上游<textarea id="playback-upstreams" placeholder="仅前后端分离的 Emby 服务器需要填写"></textarea><small>留空时播放和普通请求都使用上面的 Emby 上游。</small></label>
         <label>上游是否位于内网<select id="private"><option value="false">否（默认）</option><option value="true">是，允许私网地址</option></select><small>只有 192.168.x.x、10.x.x.x 等自有内网地址才开启。</small></label>
         <label>验证上游 HTTPS 证书<select id="tls"><option value="true">开启（推荐）</option><option value="false">关闭（仅临时排障）</option></select><small>关闭会降低回源连接安全性。</small></label>
-        <label>在网关首页显示<select id="show-home"><option value="false">不显示（更私密）</option><option value="true">显示节点名称</option></select></label>
+        <label>在公开节点页显示<select id="show-home"><option value="false">不显示（更私密）</option><option value="true">显示节点名称</option></select><small>公开节点页位于当前域名的 /gateway/。</small></label>
         <label>在管理列表置顶<select id="favorite"><option value="false">不置顶</option><option value="true">置顶</option></select></label>
         <label>节点标签<input id="tags" placeholder="家庭, 4K"></label>
         <label>限速 Mbps<input id="speed-limit" type="number" min="0" placeholder="0 = 不限速"></label>
@@ -100,7 +101,7 @@
     </details>
   </div><div class="drawer-foot"><button id="cancel-edit" class="btn ghost">取消</button><button id="save-node" class="btn primary">创建节点</button></div></aside>
 
-  <div id="modal" class="modal hidden"><div class="modal-card"><button id="close-modal" class="icon-btn">×</button><span class="eyebrow">SECURE INFORMATION</span><h2>安全信息</h2><p>节点地址可由管理员再次查看；2FA 恢复码仍只显示一次。</p><pre id="secret"></pre><button id="copy-secret" class="btn primary">复制内容</button></div></div>
+  <div id="modal" class="modal hidden"><div class="modal-card"><button id="close-modal" class="icon-btn">×</button><span id="modal-eyebrow" class="eyebrow">NODE CREDENTIALS</span><h2 id="modal-title">节点连接信息</h2><p id="modal-description">完整节点地址和连接密码可由管理员随时再次查看。</p><pre id="secret"></pre><button id="copy-secret" class="btn primary">复制内容</button></div></div>
   <div id="import-modal" class="modal hidden"><div class="modal-card"><button id="close-import" class="icon-btn">×</button><span class="eyebrow">BULK IMPORT</span><h2>导入节点配置</h2><p>粘贴 AegisRelay 导出的 JSON；启用连接密码的节点会生成新密码。</p><textarea id="import-json" class="import-area"></textarea><button id="do-import" class="btn primary">验证并导入</button></div></div>
   <div id="toast" class="toast hidden"></div>
   <script src="APP_JS"></script>

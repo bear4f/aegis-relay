@@ -86,6 +86,7 @@ nginx -t && systemctl reload nginx
 
 echo
 echo "HTTPS 收口完成："
-echo "管理面板: https://$DOMAIN/$ADMIN_PATH/"
+echo "管理面板: https://$DOMAIN/"
 echo "代理入口: https://$DOMAIN/<节点别名>/<访问密钥>/"
-echo "9080 已仅绑定 127.0.0.1；证书续期由 certbot.timer 管理。"
+echo "公开节点页（可选）: https://$DOMAIN/gateway/"
+echo "9080 已仅绑定 127.0.0.1；旧随机管理路径仍兼容，证书续期由 certbot.timer 管理。"

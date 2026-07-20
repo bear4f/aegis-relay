@@ -9,7 +9,7 @@ https://relay.example.com/r/family/<独立访问密钥>/
 
 上游域名、端口和协议不会出现在客户端地址中。管理员登录后可以随时查看和复制完整客户端地址；连接密码与其他配置一起保存在 AES-256-GCM 加密的数据文件中，代理校验仍使用 HMAC 摘要。
 
-> 当前为安全预览版 `0.2.4`。首次部署建议先在测试域名验证，再承载正式节点。
+> 当前为安全预览版 `0.3.0`。首次部署建议先在测试域名验证，再承载正式节点。
 
 ## 设计来源与原创边界
 
@@ -81,7 +81,7 @@ sudo aegis-relay domain panel.example.com admin@example.com
 该命令会依次完成：
 
 - 安装并配置 Nginx；
-- 同一 HTTPS 域名下把随机管理路径转到 `127.0.0.1:9080`，节点路径转到 `127.0.0.1:8080`；
+- 同一 HTTPS 域名根路径直接打开 2FA 管理面板，节点短路径继续由代理入口处理；
 - 通过 Certbot 申请 Let's Encrypt 证书并强制 HTTP 跳转 HTTPS；
 - 启用 `certbot.timer` 自动续期；
 - 证书成功后把 Docker 的管理端口从 `0.0.0.0:9080` 收回为 `127.0.0.1:9080`；
@@ -90,7 +90,7 @@ sudo aegis-relay domain panel.example.com admin@example.com
 最终管理地址：
 
 ```text
-https://panel.example.com/admin-随机路径/
+https://panel.example.com/
 ```
 
 最终客户端节点地址：
@@ -100,6 +100,8 @@ https://panel.example.com/charity/<访问密钥>/
 ```
 
 此时外网不能再直接访问 `IP:9080`。可从云安全组删除 9080 放行规则。Nginx 站点关闭 access log，避免路径密钥进入日志。
+
+随机管理路径仍保留为兼容入口，但日常无需记忆。可选的公开节点页移动到 `https://panel.example.com/gateway/`。管理员会话保存在同一份 AES-256-GCM 加密数据文件中，因此正常更新不会要求立即重新登录；代理层会剥离管理员会话 Cookie 和 CSRF 头，绝不会把它们发送给 Emby 上游。
 
 ### 运维命令
 

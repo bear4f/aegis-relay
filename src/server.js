@@ -9,20 +9,26 @@ import { Metrics } from './metrics.js';
 import { diagnoseRoute } from './diagnostics.js';
 import { Notifier } from './notifier.js';
 import { clientCredentials, savedCredentials } from './credentials.js';
+import { adminRelative, isRootAdminRequest, normalizeAdminPath } from './admin-path.js';
+import { customConnectionKey } from './connection-key.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cfg = {
   adminHost: process.env.ADMIN_HOST || '127.0.0.1', adminPort: +(process.env.ADMIN_PORT || 9080),
   proxyHost: process.env.PROXY_HOST || '0.0.0.0', proxyPort: +(process.env.PROXY_PORT || 8080),
-  adminPath: '/' + (process.env.ADMIN_PATH || '_aegis').replace(/^\/+|\/+$/g, ''),
+  adminPath: normalizeAdminPath(process.env.ADMIN_PATH ?? '_aegis'),
   dataFile: process.env.DATA_FILE || path.join(ROOT, 'data', 'aegis.enc.json'),
   setupToken: process.env.SETUP_TOKEN || '', secureCookies: process.env.SECURE_COOKIES !== 'false', publicBaseUrl:process.env.PUBLIC_BASE_URL||''
 };
 const key = deriveKey(process.env.APP_MASTER_KEY); const store = new Store(cfg.dataFile, key);
 const metrics = new Metrics(store);
 const notifier = new Notifier(store,metrics);
-const sessions = new Map(), loginLimiter = new RateLimiter(6, 5 * 60_000);
-const ui = fs.readFileSync(path.join(ROOT, 'web', 'index.html'),'utf8').replace('APP_JS',`${cfg.adminPath}/app.js`).replace('STYLE_CSS',`${cfg.adminPath}/style.css`).replace('HELP_CSS',`${cfg.adminPath}/help.css`);
+const sessions = store.data.sessions && typeof store.data.sessions === 'object' && !Array.isArray(store.data.sessions) ? store.data.sessions : {};
+store.data.sessions = sessions;
+function pruneSessions(){const now=Date.now();for(const [sid,session] of Object.entries(sessions))if(!session||Number(session.expires)<now)delete sessions[sid];for(const [sid] of Object.entries(sessions).sort((a,b)=>Number(b[1].expires)-Number(a[1].expires)).slice(16))delete sessions[sid]}
+pruneSessions();
+const loginLimiter = new RateLimiter(6, 5 * 60_000);
+const ui = fs.readFileSync(path.join(ROOT, 'web', 'index.html'),'utf8').replace('APP_JS','app.js').replace('STYLE_CSS','style.css').replace('HELP_CSS','help.css');
 const appjs = fs.readFileSync(path.join(ROOT,'web','app.js'));
 const stylesheet = fs.readFileSync(path.join(ROOT,'web','style.css'));
 const helpStylesheet = fs.readFileSync(path.join(ROOT,'web','help.css'));
@@ -36,7 +42,7 @@ async function body(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw Object.assign(new Error('invalid JSON'), { status: 400 }); }
 }
 function cookies(req) { return Object.fromEntries(String(req.headers.cookie || '').split(';').map(v=>v.trim().split('=').map(decodeURIComponent)).filter(v=>v.length===2)); }
-function auth(req) { const sid = cookies(req).aegis_session, s = sessions.get(sid); if (!s || s.expires < Date.now()) return null; s.expires = Date.now() + 30 * 60_000; return { sid, ...s }; }
+function auth(req) { const sid = cookies(req).aegis_session, s = Object.prototype.hasOwnProperty.call(sessions,sid)?sessions[sid]:null; if (!s || s.expires < Date.now()) { if(sid&&s){delete sessions[sid];store.save()} return null; } s.expires = Date.now() + 30 * 60_000; return { sid, ...s }; }
 function requireAuth(req) { const s = auth(req); if (!s) throw Object.assign(new Error('登录已失效，请重新登录'), { status: 401 }); if (!timingEqual(req.headers['x-csrf-token'] || '', s.csrf)) throw Object.assign(new Error('安全校验已失效，请重新登录'), { status: 403 }); return s; }
 function routeUpstreams(r) { return r.upstreams?.length?r.upstreams:(r.upstream?[r.upstream]:[]); }
 function cleanProfile(value = {}) {
@@ -48,10 +54,11 @@ function cleanProfile(value = {}) {
 }
 function cleanTags(value){return[...new Set((Array.isArray(value)?value:String(value||'').split(',')).map(x=>String(x).trim()).filter(Boolean).slice(0,8).map(x=>x.slice(0,24)))]}
 function numeric(value,min,max){const n=Number(value||0);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):0}
+function connectionKey(value){return customConnectionKey(value)||randomToken(24)}
 function publicRoute(r) { return { id:r.id, alias:r.alias, name:r.name, enabled:r.enabled, upstreams:routeUpstreams(r), playbackUpstreams:r.playbackUpstreams||[], allowPrivate:r.allowPrivate, tlsVerify:r.tlsVerify, accessMode:r.accessMode||'key', directStream:r.directStream===true, showOnHome:r.showOnHome===true, clientProfile:r.clientProfile||{enabled:false},tags:r.tags||[],notes:r.notes||'',favorite:r.favorite===true,sortOrder:Number(r.sortOrder||0),speedLimitMbps:Number(r.speedLimitMbps||0),monthlyQuotaGB:Number(r.monthlyQuotaGB||0),reminderDays:Number(r.reminderDays||0),reminderLastAt:r.reminderLastAt||null,createdAt:r.createdAt,updatedAt:r.updatedAt }; }
-function checkedAlias(value){const alias=cleanAlias(value);if(['r','index','index.html','favicon.ico'].includes(alias))throw new Error('alias is reserved');return alias;}
+function checkedAlias(value){const alias=cleanAlias(value);if(['r','api','gateway','app','index','index.html','favicon.ico'].includes(alias))throw new Error('alias is reserved');return alias;}
 
-async function api(req, res, rel) {
+async function api(req, res, rel, cookiePath = cfg.adminPath) {
   if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath });
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
@@ -66,14 +73,14 @@ async function api(req, res, rel) {
     const b = await body(req), a = store.data.admin; let second = verifyTotp(a.totpSecret, b.code);
     if (!second && b.recovery) { const d=tokenDigest(String(b.recovery),key), idx=a.recoveryDigests.findIndex(x=>timingEqual(x,d)); if(idx>=0){a.recoveryDigests.splice(idx,1);store.save();second=true;} }
     if (!verifyPassword(b.password || '', a.passwordHash) || !second) { store.audit('login.failed', ip(req)); return json(res, 401, { error:'invalid credentials' }); }
-    const sid=randomToken(), csrf=randomToken(24); sessions.set(sid,{csrf,expires:Date.now()+30*60_000}); store.audit('login.success',ip(req));
-    const cookie=`aegis_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Strict; Path=${cfg.adminPath}; Max-Age=1800${cfg.secureCookies?'; Secure':''}`; return json(res,200,{csrf},{'set-cookie':cookie});
+    const sid=randomToken(), csrf=randomToken(24); sessions[sid]={csrf,expires:Date.now()+30*60_000};pruneSessions();store.audit('login.success',ip(req));
+    const cookie=`aegis_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=604800${cfg.secureCookies?'; Secure':''}`; return json(res,200,{csrf},{'set-cookie':cookie});
   }
-  if (req.method === 'POST' && rel === '/logout') { const s=requireAuth(req);sessions.delete(s.sid);return json(res,200,{ok:true},{'set-cookie':`aegis_session=; HttpOnly; SameSite=Strict; Path=${cfg.adminPath}; Max-Age=0`}); }
+  if (req.method === 'POST' && rel === '/logout') { const s=requireAuth(req);delete sessions[s.sid];store.audit('logout',ip(req));return json(res,200,{ok:true},{'set-cookie':`aegis_session=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0`}); }
   requireAuth(req);
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.sortOrder-b.sortOrder||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/dashboard') return json(res,200,metrics.snapshot(store.data.routes));
-  if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cfg.adminPath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://')});
+  if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cookiePath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://')});
   if (req.method === 'GET' && rel === '/notifications') return json(res,200,notifier.view());
   if (req.method === 'PUT' && rel === '/notifications') {const b=await body(req),result=notifier.configure(b);store.audit('notifications.updated',ip(req));return json(res,200,result);}
   if (req.method === 'POST' && rel === '/notifications/test') {await notifier.test();store.audit('notifications.tested',ip(req));return json(res,200,{ok:true});}
@@ -86,7 +93,7 @@ async function api(req, res, rel) {
     const b=await body(req), alias=checkedAlias(b.alias); if(store.data.routes.some(r=>r.alias===alias)) return json(res,409,{error:'alias already exists'});
     const allowPrivate=b.allowPrivate===true, upstreams=await validateUpstreamList(b.upstreams||b.upstream,allowPrivate);
     const playbackUpstreams=String(b.playbackUpstreams||'').trim()?await validateUpstreamList(b.playbackUpstreams,allowPrivate):[];
-    const accessMode=b.accessMode==='alias_only'?'alias_only':'key', accessKey=accessMode==='key'?randomToken(24):'', now=new Date().toISOString();
+    const accessMode=b.accessMode==='alias_only'?'alias_only':'key', accessKey=accessMode==='key'?connectionKey(b.accessKey):'', now=new Date().toISOString();
     const r={id:randomToken(12),alias,name:String(b.name||alias).slice(0,80),upstreams,playbackUpstreams,allowPrivate,tlsVerify:b.tlsVerify!==false,enabled:true,accessMode,directStream:b.directStream===true,showOnHome:b.showOnHome===true,clientProfile:cleanProfile(b.clientProfile),tags:cleanTags(b.tags),notes:String(b.notes||'').slice(0,500),favorite:b.favorite===true,sortOrder:numeric(b.sortOrder,-10000,10000),speedLimitMbps:numeric(b.speedLimitMbps,0,100000),monthlyQuotaGB:numeric(b.monthlyQuotaGB,0,1000000),reminderDays:numeric(b.reminderDays,0,365),keyDigest:accessKey?tokenDigest(accessKey,key):null,accessKey:accessKey||null,createdAt:now,updatedAt:now};
     store.data.routes.push(r);store.audit('route.created',ip(req),alias);return json(res,201,{route:publicRoute(r),...clientCredentials(r,accessKey)});
   }
@@ -97,15 +104,17 @@ async function api(req, res, rel) {
     if(req.method==='DELETE'){store.data.routes=store.data.routes.filter(x=>x!==r);store.audit('route.deleted',ip(req),r.alias);return json(res,200,{ok:true});}
   }
   const credentials=rel.match(/^\/routes\/([^/]+)\/credentials$/);if(credentials&&req.method==='GET'){const r=store.data.routes.find(x=>x.id===credentials[1]);if(!r)return json(res,404,{error:'not found'});store.audit('route.credentials_viewed',ip(req),r.alias);return json(res,200,{...savedCredentials(r),publicBaseUrl:cfg.publicBaseUrl});}
-  const rot=rel.match(/^\/routes\/([^/]+)\/rotate-key$/);if(rot&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===rot[1]);if(!r)return json(res,404,{error:'not found'});if(r.accessMode==='alias_only')return json(res,409,{error:'this node does not use an access key'});const accessKey=randomToken(24);r.keyDigest=tokenDigest(accessKey,key);r.accessKey=accessKey;r.updatedAt=new Date().toISOString();store.audit('route.key_rotated',ip(req),r.alias);return json(res,200,clientCredentials(r,accessKey));}
+  const rot=rel.match(/^\/routes\/([^/]+)\/rotate-key$/);if(rot&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===rot[1]);if(!r)return json(res,404,{error:'not found'});if(r.accessMode==='alias_only')return json(res,409,{error:'this node does not use an access key'});const b=await body(req),accessKey=connectionKey(b.accessKey);r.keyDigest=tokenDigest(accessKey,key);r.accessKey=accessKey;r.updatedAt=new Date().toISOString();store.audit('route.key_rotated',ip(req),r.alias);return json(res,200,clientCredentials(r,accessKey));}
   const reminder=rel.match(/^\/routes\/([^/]+)\/reminder-complete$/);if(reminder&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===reminder[1]);if(!r)return json(res,404,{error:'not found'});r.reminderLastAt=new Date().toISOString();r.reminderNotifiedAt=null;store.audit('route.reminder_completed',ip(req),r.alias);return json(res,200,{ok:true,at:r.reminderLastAt});}
   const diag=rel.match(/^\/diagnostics\/([^/]+)$/);if(diag&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===diag[1]);if(!r)return json(res,404,{error:'not found'});const result=await diagnoseRoute(r);store.audit('route.diagnosed',ip(req),r.alias);return json(res,200,result);}
   return json(res,404,{error:'not found'});
 }
 
-const admin=http.createServer(async(req,res)=>{try{const u=new URL(req.url,'http://admin.invalid');if(u.pathname!==cfg.adminPath&&!u.pathname.startsWith(`${cfg.adminPath}/`))return json(res,404,{error:'not found'});const rel=u.pathname.slice(cfg.adminPath.length)||'/';if(rel.startsWith('/api/'))return await api(req,res,rel.slice(4));if(req.method!=='GET')return json(res,405,{error:'method not allowed'});if(rel==='/app.js'){res.writeHead(200,headers({'content-type':'text/javascript; charset=utf-8'}));return res.end(appjs)}if(rel==='/style.css'){res.writeHead(200,headers({'content-type':'text/css; charset=utf-8'}));return res.end(stylesheet)}if(rel==='/help.css'){res.writeHead(200,headers({'content-type':'text/css; charset=utf-8'}));return res.end(helpStylesheet)}if(rel!=='/'&&rel!=='/index.html')return json(res,404,{error:'not found'});res.writeHead(200,headers({'content-type':'text/html; charset=utf-8'}));res.end(ui);}catch(e){json(res,e.status||400,{error:String(e.message||'request rejected').slice(0,160)});}});
+async function serveAdmin(req,res,prefix){try{const u=new URL(req.url,'http://admin.invalid');if(prefix!=='/'&&u.pathname===prefix&&req.method==='GET'){res.writeHead(308,headers({location:`${prefix}/`}));return res.end()}const rel=adminRelative(u.pathname,prefix);if(rel===null)return json(res,404,{error:'not found'});if(rel.startsWith('/api/'))return await api(req,res,rel.slice(4),prefix);if(req.method!=='GET')return json(res,405,{error:'method not allowed'});if(rel==='/app.js'){res.writeHead(200,headers({'content-type':'text/javascript; charset=utf-8'}));return res.end(appjs)}if(rel==='/style.css'){res.writeHead(200,headers({'content-type':'text/css; charset=utf-8'}));return res.end(stylesheet)}if(rel==='/help.css'){res.writeHead(200,headers({'content-type':'text/css; charset=utf-8'}));return res.end(helpStylesheet)}if(rel!=='/'&&rel!=='/index.html')return json(res,404,{error:'not found'});res.writeHead(200,headers({'content-type':'text/html; charset=utf-8'}));res.end(ui);}catch(e){json(res,e.status||400,{error:String(e.message||'request rejected').slice(0,160)});}}
+const admin=http.createServer((req,res)=>serveAdmin(req,res,cfg.adminPath));
 admin.requestTimeout=35_000;admin.headersTimeout=10_000;admin.listen(cfg.adminPort,cfg.adminHost,()=>console.log(`AegisRelay admin listening on http://${cfg.adminHost}:${cfg.adminPort}${cfg.adminPath}`));
-const proxy=http.createServer(makeProxyHandler(store,key,metrics));proxy.requestTimeout=0;proxy.headersTimeout=15_000;proxy.on('upgrade',(req,socket,head)=>handleUpgrade(req,socket,head,store,key));proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));
+const relay=makeProxyHandler(store,key,metrics);
+const proxy=http.createServer((req,res)=>{const pathname=new URL(req.url,'http://relay.invalid').pathname;return isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res)});proxy.requestTimeout=0;proxy.headersTimeout=15_000;proxy.on('upgrade',(req,socket,head)=>handleUpgrade(req,socket,head,store,key));proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));
 const flushTimer=setInterval(()=>store.save(),60_000);flushTimer.unref();
 const reminderTimer=setInterval(()=>notifier.tick(store.data.routes),60*60_000);reminderTimer.unref();
 for(const sig of ['SIGINT','SIGTERM'])process.on(sig,()=>{clearInterval(flushTimer);clearInterval(reminderTimer);store.save();admin.close();proxy.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10_000).unref();});
