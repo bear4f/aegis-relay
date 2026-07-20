@@ -77,6 +77,10 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
     const cookie=`aegis_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=604800${cfg.secureCookies?'; Secure':''}`; return json(res,200,{csrf},{'set-cookie':cookie});
   }
   if (req.method === 'POST' && rel === '/logout') { const s=requireAuth(req);delete sessions[s.sid];store.audit('logout',ip(req));return json(res,200,{ok:true},{'set-cookie':`aegis_session=; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=0`}); }
+  // Resume an existing session after a page refresh: hands the CSRF token back to a browser that still
+  // holds the HttpOnly, SameSite=Strict session cookie. No CSRF token is required to read it, and the
+  // strict cookie plus same-origin policy keep it unreadable to other sites.
+  if (req.method === 'GET' && rel === '/session') { const s=auth(req); if(!s) return json(res,401,{error:'登录已失效，请重新登录'}); return json(res,200,{csrf:s.csrf,username:store.data.admin?.username||''}); }
   requireAuth(req);
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.sortOrder-b.sortOrder||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/dashboard') return json(res,200,metrics.snapshot(store.data.routes));

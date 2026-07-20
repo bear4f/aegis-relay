@@ -40,9 +40,14 @@ function bytes(n=0){const units=['B','KB','MB','GB','TB'];let i=0;n=Number(n)||0
 function uptime(start){if(!start)return'—';let s=Math.max(0,(Date.now()-new Date(start))/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}天 ${h}时`:`${h}时 ${m}分`}
 function showSecret(content,{eyebrow='NODE CREDENTIALS',title='节点连接信息',description='完整节点地址和连接密码可由管理员随时再次查看。'}={}){$('#modal-eyebrow').textContent=eyebrow;$('#modal-title').textContent=title;$('#modal-description').textContent=description;$('#secret').textContent=content;$('#modal').classList.remove('hidden')}
 
-async function start(){try{const status=await call('/status');$(status.initialized?'#login':'#setup').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}}
+async function enterApp(){$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');await refreshAll();streamDashboard()}
+async function start(){
+  // Resume a still-valid session (survives refresh) before falling back to the login screen.
+  try{const r=await fetch(base+'/session',{headers:{'content-type':'application/json'}});if(r.ok){const d=await r.json();if(d&&d.csrf){state.csrf=d.csrf;await enterApp();return}}}catch{}
+  try{const status=await call('/status');$('#auth').classList.remove('hidden');$(status.initialized?'#login':'#setup').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}
+}
 $('#setup-btn').onclick=async()=>{try{const data=await call('/setup',{method:'POST',body:JSON.stringify({username:value('#su-user'),password:value('#su-pass'),setupToken:value('#su-token')})});showSecret(`TOTP Secret\n${data.secret}\n\n恢复码（每行一个）\n${data.recovery.join('\n')}\n\n配置 URI\n${data.totpUri}`,{eyebrow:'2FA RECOVERY',title:'保存 2FA 恢复信息',description:'恢复码只在初始化时显示一次，请立即离线保存。'});$('#setup').classList.add('hidden');$('#login').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}};
-$('#login-btn').onclick=async()=>{try{const data=await call('/login',{method:'POST',body:JSON.stringify({password:value('#password'),code:value('#code')})});state.csrf=data.csrf;$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');await refreshAll();streamDashboard()}catch(e){$('#gate-msg').textContent=e.message}};
+$('#login-btn').onclick=async()=>{try{const data=await call('/login',{method:'POST',body:JSON.stringify({password:value('#password'),code:value('#code')})});state.csrf=data.csrf;await enterApp()}catch(e){$('#gate-msg').textContent=e.message}};
 $('#logout').onclick=async()=>{try{await call('/logout',{method:'POST',body:'{}'})}finally{location.reload()}};
 
 async function refreshAll(){const [routes,dashboard]=await Promise.all([call('/routes'),call('/dashboard')]);state.routes=routes.routes;state.dashboard=dashboard;renderRoutes();renderDashboard(dashboard);renderTraffic(dashboard);fillDiagnosticNodes()}

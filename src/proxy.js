@@ -138,13 +138,6 @@ function externalRedirectPath(location, base) {
   return null;
 }
 
-function publicRequestContext(req) {
-  const host=String(req.headers.host||'').trim();
-  const forwarded=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim().toLowerCase();
-  const proto=forwarded==='https'||forwarded==='http'?forwarded:(req.socket.encrypted?'https':'http');
-  return {host,proto};
-}
-
 function cleanResponseHeaders(input) {
   const out=strip(input); delete out.server; delete out.via; delete out['x-powered-by'];
   stripAdminSetCookies(out);out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
@@ -163,10 +156,10 @@ export function makeProxyHandler(store, key, metrics = null) {
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
-    const publicContext=publicRequestContext(req);
-    const originalHeaders=stripAdminCredentials(strip(req.headers)); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded;
-    if(publicContext.host)originalHeaders['x-forwarded-host']=publicContext.host;
-    originalHeaders['x-forwarded-proto']=publicContext.proto;
+    // Present as a direct client to the upstream. Advertising a proxy host/scheme makes Emby
+    // emit absolute stream URLs that omit this node's /alias/key/ sub-path, which breaks playback.
+    const originalHeaders=stripAdminCredentials(strip(req.headers));
+    delete originalHeaders['x-forwarded-for']; delete originalHeaders['x-forwarded-proto']; delete originalHeaders.forwarded;
     applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
@@ -212,9 +205,8 @@ export function makeProxyHandler(store, key, metrics = null) {
 export function handleUpgrade(req, socket, head, store, key) {
   const found=routeFor(req,store.data.routes,key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
-  delete headers['x-forwarded-for']; delete headers.forwarded; applyClientProfile(headers,found.route.clientProfile);
-  if(publicContext.host)headers['x-forwarded-host']=publicContext.host;headers['x-forwarded-proto']=publicContext.proto;
+  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), headers=stripAdminCredentials(strip(req.headers));
+  delete headers['x-forwarded-for']; delete headers['x-forwarded-proto']; delete headers.forwarded; applyClientProfile(headers,found.route.clientProfile);
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;
   const up=transport.request({hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});
