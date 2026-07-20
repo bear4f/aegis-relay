@@ -134,7 +134,15 @@ function externalRedirectPath(location, base) {
   if(basePath&&basePath!=='/'&&(location.pathname===basePath||location.pathname.startsWith(`${basePath}/`))){
     return location.pathname.slice(basePath.length)||'/';
   }
-  return location.pathname;
+  if(!basePath||basePath==='/')return location.pathname;
+  return null;
+}
+
+function publicRequestContext(req) {
+  const host=String(req.headers.host||'').trim();
+  const forwarded=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim().toLowerCase();
+  const proto=forwarded==='https'||forwarded==='http'?forwarded:(req.socket.encrypted?'https':'http');
+  return {host,proto};
 }
 
 function cleanResponseHeaders(input) {
@@ -155,13 +163,17 @@ export function makeProxyHandler(store, key, metrics = null) {
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
-    const originalHeaders=stripAdminCredentials(strip(req.headers)); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; applyClientProfile(originalHeaders,route.clientProfile);
+    const publicContext=publicRequestContext(req);
+    const originalHeaders=stripAdminCredentials(strip(req.headers)); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded;
+    if(publicContext.host)originalHeaders['x-forwarded-host']=publicContext.host;
+    originalHeaders['x-forwarded-proto']=publicContext.proto;
+    applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
     const attempt=(targetValue,index,redirects=0,redirectFrom=null)=>{
       if (finished) return;
       const target=redirectFrom || joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
-      requestHeaders.host=target.host; requestHeaders['x-forwarded-proto']=req.socket.encrypted?'https':'http';
+      requestHeaders.host=target.host;
       if (target.origin!==base.origin) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
       const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,timeout:30_000,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate)};
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
@@ -173,7 +185,14 @@ export function makeProxyHandler(store, key, metrics = null) {
         }
         if(RETRY_STATUS.has(status))markFailure(route,targetValue,`HTTP ${status}`);else markSuccess(route,targetValue); const out=cleanResponseHeaders(upRes.headers);
         if (out.location) {
-          try { const loc=new URL(out.location,target); if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;else if (loc.origin===base.origin) out.location=`${found.prefix}${externalRedirectPath(loc,base)}${loc.search}`; }
+          try {
+            const loc=new URL(out.location,target);
+            if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;
+            else if(loc.origin===base.origin){
+              const redirectedPath=externalRedirectPath(loc,base);
+              out.location=redirectedPath===null?loc.href:`${found.prefix}${redirectedPath}${loc.search}${loc.hash}`;
+            }
+          }
           catch { delete out.location; }
         }
         finished=true; const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};res.once('finish',finishMetric);res.once('close',finishMetric);res.writeHead(status,out);upRes.pipe(counter).pipe(res);
@@ -193,8 +212,9 @@ export function makeProxyHandler(store, key, metrics = null) {
 export function handleUpgrade(req, socket, head, store, key) {
   const found=routeFor(req,store.data.routes,key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), headers=stripAdminCredentials(strip(req.headers));
+  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; applyClientProfile(headers,found.route.clientProfile);
+  if(publicContext.host)headers['x-forwarded-host']=publicContext.host;headers['x-forwarded-proto']=publicContext.proto;
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;
   const up=transport.request({hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});

@@ -28,6 +28,7 @@ async function call(path,options={}){
   let data={};
   if(type.includes('application/json')){try{data=raw?JSON.parse(raw):{}}catch{throw Error('管理接口返回了损坏的数据，请刷新页面后重试')}}
   else if(response.status===401&&path!=='/login'){showLogin();throw Error('登录已失效，请重新登录')}
+  else if([502,503,504].includes(response.status))throw Error(`管理服务连接中断（HTTP ${response.status}），容器可能正在重启，请稍后重试并检查服务日志`);
   else throw Error(response.ok?`管理接口返回了网页而不是数据（HTTP ${response.status}），请刷新页面后重试`:`请求未到达管理接口（HTTP ${response.status}），请检查 Nginx/CDN 是否允许 /api/ 路径`);
   if(response.status===401&&path!=='/login'){showLogin();throw Error('登录已失效，请重新登录')}
   if(!response.ok)throw Error(data.error||'请求失败');
