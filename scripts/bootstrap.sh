@@ -42,6 +42,7 @@ else
 fi
 
 mkdir -p data
+chown -R 10001:10001 data
 chmod 700 data
 if docker compose version >/dev/null 2>&1; then docker compose up -d --build; else docker-compose up -d --build; fi
 install -m 0755 scripts/aegis-relay /usr/local/bin/aegis-relay

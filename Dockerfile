@@ -1,5 +1,10 @@
 FROM node:22-alpine
-RUN addgroup -S aegis && adduser -S -G aegis aegis
+ARG AEGIS_UID=10001
+ARG AEGIS_GID=10001
+RUN addgroup -S -g "$AEGIS_GID" aegis \
+    && adduser -S -D -H -u "$AEGIS_UID" -G aegis aegis \
+    && mkdir -p /app/data \
+    && chown aegis:aegis /app/data
 WORKDIR /app
 COPY --chown=aegis:aegis package.json ./
 COPY --chown=aegis:aegis src ./src

@@ -113,6 +113,14 @@ certbot certificates
 
 如果 DNS 或证书申请失败，脚本不会关闭 9080 临时入口；修复后重新执行 `aegis-relay domain`。Nginx 配置校验失败会自动恢复上一份站点配置。
 
+### 数据目录权限修复
+
+若旧版本首次创建管理员时出现 `EACCES: permission denied, open '/app/data/...'`，重新执行安装命令即可。安装器会保留 `.env` 和加密数据，并将数据目录修正为固定的非 root 运行用户：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh | sudo sh
+```
+
 ## 使用流程
 
 1. 用 Setup Token 初始化管理员，立即保存 TOTP Secret 和恢复码。

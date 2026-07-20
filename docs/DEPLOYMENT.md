@@ -76,3 +76,7 @@ sudo aegis-relay update
 - `/etc/letsencrypt/`
 
 数据文件与 `APP_MASTER_KEY` 缺一不可，建议分开加密保存。
+
+## 数据目录权限
+
+容器固定使用 UID/GID `10001:10001`，安装器会将 `/opt/aegis-relay/data` 调整为该用户所有，并保持目录权限 `0700`。如果从早期版本更新后遇到 `EACCES`，重新运行一键安装命令即可在不覆盖 `.env` 和数据的情况下修复所有权并重建容器。
