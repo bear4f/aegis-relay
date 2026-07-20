@@ -79,7 +79,7 @@
     <div class="form-grid simple-form">
       <label>节点名称<input id="name" placeholder="例如：家庭媒体库"><small>只在管理面板中用于区分节点。</small></label>
       <label>客户端短路径<input id="alias" placeholder="例如：home"><small>客户端地址中简短易记的一段。</small></label>
-      <label class="full">Emby 上游地址<textarea id="upstreams" placeholder="https://emby-origin.example.com"></textarea><small>填写真实 Emby 地址；有备用线路时换行填写，最多 8 条。</small></label>
+      <label class="full">Emby 上游地址<textarea id="upstreams" placeholder="https://emby-origin.example.com"></textarea><small>填写真实 Emby 地址；有备用线路时换行填写。若连接 Toolbox 通用网关，请粘贴包含 URL 密钥及 /http/ 或 /https/ 的完整网关地址。</small></label>
       <label>连接密码<select id="access-mode"><option value="key">开启（推荐，防止他人盗用）</option><option value="alias_only">关闭（知道短路径即可访问）</option></select><small>开启后自动生成密码，管理员可随时查看完整地址。</small></label>
       <label>遇到 302 播放跳转时<select id="direct-stream"><option value="false">由本机中转（隐私优先）</option><option value="true">让客户端直连（更快、省流量）</option></select><small>不确定时保持“由本机中转”。</small></label>
     </div>

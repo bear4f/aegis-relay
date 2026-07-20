@@ -45,6 +45,16 @@ https://relay.example.com/charity/<访问密钥>/
 
 主线路和播放线路都使用相同的私网、TLS 和请求头安全策略。
 
+### 连接 Emby Proxy Toolbox 通用网关
+
+上游地址必须保留 Toolbox 生成的完整基础路径，例如：
+
+```text
+https://gateway.example.com/工具箱密钥/http/origin.example.com:8096
+```
+
+HTTP 端口必须包含 `/http/`；默认格式会按 HTTPS 回源。AegisRelay 会在登录跳转时去除已经存在的 Toolbox 基础路径，再拼接节点短路径，避免路径重复导致 502。
+
 ## 302 直连与隐私中转
 
 | 策略 | 行为 | 优点 | 风险/代价 |

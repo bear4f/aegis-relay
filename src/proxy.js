@@ -74,6 +74,16 @@ function markFailure(route, target, reason) {
   const s=stateFor(route,target); s.failures++; s.lastError=String(reason || 'request failed').slice(0,120);
   if (s.failures >= 2) s.openUntil=Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(s.failures - 2, 4));
 }
+function safeUpstreamError(error) {
+  const code=String(error?.code||''),message=String(error?.message||'').toLowerCase();
+  if(code==='ECONNREFUSED')return'上游拒绝连接，请检查地址、端口和防火墙';
+  if(code==='ENOTFOUND'||code==='EAI_AGAIN')return'上游域名解析失败';
+  if(code==='ETIMEDOUT'||message.includes('timeout'))return'上游连接超时';
+  if(code==='ECONNRESET'||message.includes('socket hang up'))return'上游提前断开连接';
+  if(code.includes('CERT')||message.includes('certificate')||message.includes('self-signed'))return'上游 TLS 证书验证失败';
+  if(code==='EPROTO'||message.includes('wrong version number')||message.includes('ssl routines'))return'上游协议不匹配，请检查 HTTP/HTTPS';
+  return'上游连接失败';
+}
 function orderedTargets(route, playback) {
   const all=normalizedUpstreams(route,playback), available=all.filter(t=>stateFor(route,t).openUntil<=Date.now()), pool=available.length?available:all;
   if (!pool.length) return [];
@@ -112,6 +122,14 @@ function joinTarget(target, rest, search) {
   base.pathname=`${left}${right}`.replace(/\/{2,}/g,'/'); base.search=search; return base;
 }
 
+function externalRedirectPath(location, base) {
+  const basePath=base.pathname.replace(/\/$/,'');
+  if(basePath&&basePath!=='/'&&(location.pathname===basePath||location.pathname.startsWith(`${basePath}/`))){
+    return location.pathname.slice(basePath.length)||'/';
+  }
+  return location.pathname;
+}
+
 function cleanResponseHeaders(input) {
   const out=strip(input); delete out.server; delete out.via; delete out['x-powered-by'];
   out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
@@ -146,18 +164,18 @@ export function makeProxyHandler(store, key, metrics = null) {
           let next; try { next=new URL(upRes.headers.location,target); } catch { next=null; }
           if (next && ['http:','https:'].includes(next.protocol)) { upRes.resume(); markSuccess(route,targetValue); return attempt(targetValue,index,redirects+1,next); }
         }
-        markSuccess(route,targetValue); const out=cleanResponseHeaders(upRes.headers);
+        if(RETRY_STATUS.has(status))markFailure(route,targetValue,`HTTP ${status}`);else markSuccess(route,targetValue); const out=cleanResponseHeaders(upRes.headers);
         if (out.location) {
-          try { const loc=new URL(out.location,target); if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;else if (loc.origin===base.origin) out.location=`${found.prefix}${loc.pathname}${loc.search}`; }
+          try { const loc=new URL(out.location,target); if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;else if (loc.origin===base.origin) out.location=`${found.prefix}${externalRedirectPath(loc,base)}${loc.search}`; }
           catch { delete out.location; }
         }
         finished=true; const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};res.once('finish',finishMetric);res.once('close',finishMetric);res.writeHead(status,out);upRes.pipe(counter).pipe(res);
       });
       up.on('timeout',()=>up.destroy(new Error('upstream timeout')));
       up.on('error',err=>{
-        markFailure(route,targetValue,err.message);
+        const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
-        if (!finished) { finished=true;metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); res.end('bad gateway'); }
+        if (!finished) { finished=true;metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store','content-type':'text/plain; charset=utf-8'}); res.end(`Bad Gateway\n${reason}`); }
       });
       if (canRetry) up.end(); else req.pipe(up);
     };
