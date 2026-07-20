@@ -7,8 +7,8 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: ["ALL"]
     ports:
-      - "8080:8080"
-      - "127.0.0.1:9080:9080"
+      - "${PROXY_PUBLISH_IP:-127.0.0.1}:8080:8080"
+      - "${ADMIN_PUBLISH_IP:-127.0.0.1}:9080:9080"
     volumes:
       - ./data:/app/data
     env_file: .env

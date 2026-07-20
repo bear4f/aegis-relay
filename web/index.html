@@ -1,7 +1,78 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AegisRelay</title><style>
-:root{color-scheme:dark;--bg:#08111e;--card:#111d2e;--line:#24344b;--text:#e8eef8;--muted:#91a0b7;--accent:#54d1b2;--danger:#ff7785}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 10% 0,#12334b 0,transparent 35%),var(--bg);font:15px system-ui;color:var(--text)}main{max-width:1120px;margin:auto;padding:36px 20px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}h1{margin:0;font-size:25px;letter-spacing:.4px}h1 span{color:var(--accent)}.card{background:#111d2ee8;border:1px solid var(--line);border-radius:16px;padding:22px;margin:16px 0;box-shadow:0 14px 40px #0005}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.wide{grid-column:span 2}label{display:block;color:var(--muted);font-size:13px;margin-bottom:5px}input,textarea,select,button{width:100%;border-radius:9px;border:1px solid var(--line);background:#091421;color:var(--text);padding:11px}textarea{min-height:86px;resize:vertical}button{cursor:pointer;background:#19364a}button.primary{background:var(--accent);color:#05251d;font-weight:700}.danger{color:var(--danger)}.muted{color:var(--muted)}.route{display:grid;grid-template-columns:minmax(140px,1fr) minmax(180px,2fr) auto;align-items:center;gap:12px;border-top:1px solid var(--line);padding:16px 0}.route code{color:var(--accent)}.actions{display:flex;gap:7px}.route button{width:auto;padding:8px 10px}.hidden{display:none}.secret{white-space:pre-wrap;word-break:break-all;background:#07101b;padding:12px;border-radius:8px;border:1px dashed var(--accent)}nav button{width:auto;margin-left:8px}.pill{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:99px;padding:3px 8px;margin:2px}pre{white-space:pre-wrap}.notice{border-left:3px solid var(--accent);padding-left:12px}@media(max-width:720px){.route{grid-template-columns:1fr}.wide{grid-column:auto}}</style></head><body><main>
-<header><h1><span>AEGIS</span> RELAY</h1><nav id="nav" class="hidden"><button data-page="routes">节点</button><button data-page="diagnostics">线路状态</button><button data-page="audit">审计</button><button id="logout">退出</button></nav></header>
-<section id="gate" class="card"><h2>安全登录</h2><p class="muted">管理端使用密码 + TOTP。会话仅通过 HttpOnly Cookie 保存。</p><div id="setup" class="hidden"><div class="grid"><div><label>管理员名称</label><input id="su-user" value="admin"></div><div><label>强密码（至少 14 位）</label><input id="su-pass" type="password"></div><div><label>部署生成的 Setup Token</label><input id="su-token" type="password"></div></div><p><button id="setup-btn" class="primary">初始化并生成 2FA</button></p></div><div id="login" class="hidden"><div class="grid"><div><label>密码</label><input id="password" type="password"></div><div><label>6 位动态码</label><input id="code" inputmode="numeric" maxlength="6"></div></div><p><button id="login-btn" class="primary">登录</button></p></div><p id="gate-msg" class="danger"></p></section>
-<section id="app" class="hidden"><div id="routes-page"><div class="card"><h2 id="form-title">新增 Emby 节点</h2><div class="grid"><div><label>展示名称</label><input id="name" placeholder="某某公益服"></div><div><label>唯一短路径</label><input id="alias" placeholder="charity"></div><div class="wide"><label>主上游线路（分号或换行分隔，按故障自动切换）</label><textarea id="upstreams" placeholder="https://line-a.example.com&#10;https://line-b.example.com"></textarea></div><div class="wide"><label>播放专用线路（可选，用于前后端分离）</label><textarea id="playback-upstreams" placeholder="https://cdn.example.com"></textarea></div><div><label>访问保护</label><select id="access-mode"><option value="key">独立访问密钥（推荐）</option><option value="alias_only">仅别名（容易被扫描）</option></select></div><div><label>302 外链策略</label><select id="direct-stream"><option value="false">隐私中转（消耗本机流量）</option><option value="true">客户端直连（可能暴露客户端 IP）</option></select></div><div><label>私网回源</label><select id="private"><option value="false">阻止（推荐）</option><option value="true">明确允许</option></select></div><div><label>上游 TLS 验证</label><select id="tls"><option value="true">验证（推荐）</option><option value="false">关闭（高风险）</option></select></div><div><label>网关首页展示</label><select id="show-home"><option value="false">隐藏（推荐）</option><option value="true">展示名称</option></select></div><div><label>兼容性请求头</label><select id="profile-enabled"><option value="false">关闭</option><option value="true">启用（仅限获授权上游）</option></select></div><div><label>User-Agent</label><input id="profile-ua" placeholder="自定义兼容标识"></div><div><label>X-Emby-Client</label><input id="profile-client" placeholder="AuthorizedClient"></div><div><label>X-Emby-Device-Name</label><input id="profile-device" placeholder="AegisRelay"></div><div><label>X-Emby-Device-Id</label><input id="profile-device-id" placeholder="固定设备标识"></div></div><p class="actions"><button id="add" class="primary">创建节点</button><button id="cancel-edit" class="hidden">取消编辑</button></p><p class="muted">兼容性请求头仅用于你已获授权的 Emby 上游，不应被用于绕过服务器访问规则。上游配置会加密保存。</p></div><div class="card"><h2>服务器节点</h2><div id="routes"></div></div></div><div id="diagnostics-page" class="card hidden"><h2>线路熔断状态</h2><pre id="diagnostics"></pre></div><div id="audit-page" class="card hidden"><h2>安全审计</h2><pre id="audit"></pre></div></section>
-<div id="modal" class="card hidden"><h2>请立即保存</h2><p class="notice">这是访问密钥唯一一次明文显示。不要截图、不要发送到聊天或工单。</p><div id="secret" class="secret"></div><p><button id="close-modal" class="primary">我已安全保存</button></p></div>
-<script src="APP_JS"></script></main></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AegisRelay · Emby Gateway</title>
+  <link rel="stylesheet" href="STYLE_CSS">
+</head>
+<body>
+  <section id="auth" class="auth-shell">
+    <div class="auth-art">
+      <div class="brand brand-large"><span class="brand-mark">A</span><div><strong>AegisRelay</strong><small>PRIVACY-FIRST MEDIA GATEWAY</small></div></div>
+      <div class="auth-copy"><span class="eyebrow">安全入口</span><h1>你的媒体节点，<br>由你掌控边界。</h1><p>多线路容灾、流量治理、隐私中转和双因素认证，集中在一个干净的控制台。</p></div>
+      <div class="orb orb-one"></div><div class="orb orb-two"></div>
+    </div>
+    <div class="auth-panel">
+      <div id="setup" class="auth-form hidden"><span class="eyebrow">首次部署</span><h2>创建管理员</h2><p>初始化后必须使用密码与 TOTP 动态码登录。</p><label>管理员名称<input id="su-user" value="admin" autocomplete="username"></label><label>强密码<input id="su-pass" type="password" autocomplete="new-password" placeholder="至少 14 位"></label><label>Setup Token<input id="su-token" type="password" autocomplete="off" placeholder="安装程序生成的一次性令牌"></label><button id="setup-btn" class="btn primary">初始化并生成 2FA</button></div>
+      <div id="login" class="auth-form hidden"><span class="eyebrow">管理员登录</span><h2>欢迎回来</h2><p>会话将在 30 分钟无操作后失效。</p><label>密码<input id="password" type="password" autocomplete="current-password"></label><label>6 位动态码<input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000"></label><button id="login-btn" class="btn primary">安全登录</button></div>
+      <p id="gate-msg" class="error"></p>
+    </div>
+  </section>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">A</span><div><strong>AegisRelay</strong><small>MEDIA GATEWAY</small></div></div>
+      <nav>
+        <button data-page="dashboard" class="active"><span>◫</span>仪表盘</button>
+        <button data-page="nodes"><span>◇</span>节点管理</button>
+        <button data-page="traffic"><span>⌁</span>流量统计</button>
+        <button data-page="diagnostics"><span>⌁</span>故障诊断</button>
+        <button data-page="audit"><span>≡</span>安全审计</button>
+        <button data-page="notifications"><span>◉</span>通知提醒</button>
+        <button data-page="deployment"><span>⌂</span>部署向导</button>
+      </nav>
+      <div class="sidebar-foot"><div class="security-state"><i></i><div><strong>安全模式</strong><small>2FA · 加密存储</small></div></div><button id="logout" class="text-btn">退出登录</button></div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar"><div><p id="breadcrumb">控制台 / 仪表盘</p><h1 id="page-title">仪表盘</h1></div><div class="top-actions"><span id="live-state" class="live"><i></i>实时</span><button id="global-add" class="btn primary">＋ 新增节点</button></div></header>
+
+      <section id="dashboard-page" class="page active-page">
+        <div class="hero"><div><span class="eyebrow">运行概览</span><h2>所有节点，一眼掌握。</h2><p>实时流量、健康状态和活动连接集中展示。</p></div><div class="hero-orbit"><span></span><b>A</b></div></div>
+        <div class="metric-grid">
+          <article class="metric blue"><span class="metric-icon">◇</span><div><small>节点总数</small><strong id="m-nodes">0</strong><em id="m-running">0 个运行中</em></div></article>
+          <article class="metric green"><span class="metric-icon">↗</span><div><small>累计流量</small><strong id="m-traffic">0 B</strong><em>代理出口统计</em></div></article>
+          <article class="metric violet"><span class="metric-icon">⌁</span><div><small>累计请求</small><strong id="m-requests">0</strong><em id="m-active">0 个活动连接</em></div></article>
+          <article class="metric amber"><span class="metric-icon">◷</span><div><small>运行时长</small><strong id="m-uptime">—</strong><em>当前实例</em></div></article>
+        </div>
+        <div class="dashboard-grid"><article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">最近 14 天</span><h3>流量趋势</h3></div><span class="muted">每日下行流量</span></div><div id="traffic-chart" class="bar-chart"></div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">需要关注</span><h3>节点状态</h3></div><button data-jump="nodes" class="link-btn">查看全部</button></div><div id="dashboard-nodes" class="mini-list"></div></article></div>
+      </section>
+
+      <section id="nodes-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ROUTE DIRECTORY</span><h2>节点管理</h2><p>管理短路径、主/播放线路、访问密钥与流量策略。</p></div><div class="inline-actions"><button id="export-btn" class="btn ghost">导出配置</button><button id="import-btn" class="btn ghost">批量导入</button><button class="btn primary add-node">＋ 新增节点</button></div></div><div id="node-grid" class="node-grid"></div></section>
+
+      <section id="traffic-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">BANDWIDTH CONTROL</span><h2>流量统计</h2><p>按节点查看请求、播放流量、月度配额与限速策略。</p></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>节点</th><th>请求</th><th>播放请求</th><th>总流量</th><th>本月流量 / 配额</th><th>限速</th><th>错误</th></tr></thead><tbody id="traffic-table"></tbody></table></div></article></section>
+
+      <section id="diagnostics-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ORIGIN INSPECTOR</span><h2>故障诊断</h2><p>检查主回源、播放回源、TLS 证书和实际请求头策略。</p></div><div class="diagnostic-action"><select id="diag-node"></select><button id="run-diagnostic" class="btn primary">开始诊断</button></div></div><div id="diag-runtime" class="status-strip"></div><div id="diagnostic-result" class="diagnostic-grid"><article class="panel empty-state"><b>⌁</b><h3>选择节点开始诊断</h3><p>诊断只发起轻量探针，不会拉取媒体文件。</p></article></div></section>
+
+      <section id="audit-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">SECURITY LEDGER</span><h2>安全审计</h2><p>最近 100 条管理员与节点变更事件，敏感信息自动脱敏。</p></div></div><article class="panel"><div id="audit-list" class="timeline"></div></article></section>
+
+      <section id="notifications-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">KEEPALIVE REMINDERS</span><h2>通知提醒</h2><p>通过 Telegram Bot 推送节点保号周期提醒；Bot Token 加密存储且不会回显。</p></div></div><div class="dashboard-grid"><article class="panel"><div class="panel-head"><div><span class="eyebrow">TELEGRAM</span><h3>机器人设置</h3></div><span id="telegram-state" class="pill">未配置</span></div><div class="form-grid"><label>Bot Token<input id="telegram-token" type="password" placeholder="仅设置或轮换时填写"></label><label>Chat ID<input id="telegram-chat" placeholder="个人或群组 Chat ID"></label><label class="full switch-row"><span>启用定时提醒</span><input id="telegram-enabled" type="checkbox"></label></div><div class="inline-actions"><button id="save-notifications" class="btn primary">保存设置</button><button id="test-notifications" class="btn ghost">发送测试消息</button></div></article><article class="panel"><span class="eyebrow">HOW IT WORKS</span><h3>提醒规则</h3><p class="muted">在节点编辑器中填写保号周期。达到周期后每天最多提醒一次；完成维护后在节点卡片点击“已保号”，周期会重新计算。</p><p class="muted">通知失败不会影响代理请求，也不会把 Bot Token 写入日志。</p></article></div></section>
+
+      <section id="deployment-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">HTTPS HANDOFF</span><h2>部署向导</h2><p>从临时公网端口过渡到 Nginx + HTTPS，并关闭管理端口公网访问。</p></div></div><div id="deployment-status" class="deploy-grid"></div><article class="panel guide"><ol><li><b>临时初始化</b><p>安装后通过 <code>http://服务器IP:9080/随机管理路径</code> 完成管理员与 2FA 设置。</p></li><li><b>域名解析</b><p>把域名 A/AAAA 记录指向当前服务器，确认 80/443 可访问。</p></li><li><b>执行 HTTPS 收口</b><pre>sudo aegis-relay domain example.com admin@example.com</pre></li><li><b>最终状态</b><p>脚本签发证书、启用自动续期、把 9080 重新绑定至 127.0.0.1，并只保留 HTTPS 入口。</p></li></ol></article></section>
+    </main>
+  </div>
+
+  <div id="drawer-backdrop" class="backdrop hidden"></div>
+  <aside id="node-drawer" class="drawer hidden"><div class="drawer-head"><div><span class="eyebrow">NODE EDITOR</span><h2 id="form-title">新增 Emby 节点</h2></div><button id="close-drawer" class="icon-btn">×</button></div><div class="drawer-body">
+    <div class="form-grid"><label>展示名称<input id="name" placeholder="家庭媒体库"></label><label>唯一短路径<input id="alias" placeholder="home"></label><label class="full">标签<input id="tags" placeholder="公益服, 国内, 4K"></label><label class="full">备注<textarea id="notes" placeholder="仅管理员可见"></textarea></label><label class="full">主上游线路<textarea id="upstreams" placeholder="https://line-a.example.com&#10;https://line-b.example.com"></textarea><small>分号或换行分隔，最多 8 条</small></label><label class="full">播放专用线路<textarea id="playback-upstreams" placeholder="前后端分离时填写"></textarea></label><label>访问保护<select id="access-mode"><option value="key">独立访问密钥</option><option value="alias_only">仅别名</option></select></label><label>302 策略<select id="direct-stream"><option value="false">隐私中转</option><option value="true">客户端直连</option></select></label><label>私网回源<select id="private"><option value="false">阻止</option><option value="true">明确允许</option></select></label><label>TLS 验证<select id="tls"><option value="true">开启</option><option value="false">关闭（高风险）</option></select></label><label>网关首页<select id="show-home"><option value="false">隐藏</option><option value="true">展示名称</option></select></label><label>收藏节点<select id="favorite"><option value="false">否</option><option value="true">置顶</option></select></label><label>限速 Mbps<input id="speed-limit" type="number" min="0" placeholder="0 = 不限速"></label><label>月配额 GB<input id="monthly-quota" type="number" min="0" placeholder="0 = 不限额"></label><label>保号周期（天）<input id="reminder-days" type="number" min="0" max="365" placeholder="0 = 不提醒"></label></div>
+    <div class="form-section"><div><h3>获授权的客户端兼容</h3><p>只改写声明字段，不修改 Emby 认证 Token。</p></div><label class="switch-row"><span>启用兼容请求头</span><input id="profile-enabled" type="checkbox"></label><div class="form-grid"><label>User-Agent<input id="profile-ua"></label><label>X-Emby-Client<input id="profile-client"></label><label>设备名称<input id="profile-device"></label><label>设备 ID<input id="profile-device-id"></label></div></div>
+  </div><div class="drawer-foot"><button id="cancel-edit" class="btn ghost">取消</button><button id="save-node" class="btn primary">创建节点</button></div></aside>
+
+  <div id="modal" class="modal hidden"><div class="modal-card"><button id="close-modal" class="icon-btn">×</button><span class="eyebrow">ONE-TIME SECRET</span><h2>请立即安全保存</h2><p>访问密钥和恢复码不会再次明文显示。</p><pre id="secret"></pre><button id="copy-secret" class="btn primary">复制内容</button></div></div>
+  <div id="import-modal" class="modal hidden"><div class="modal-card"><button id="close-import" class="icon-btn">×</button><span class="eyebrow">BULK IMPORT</span><h2>导入节点配置</h2><p>粘贴 AegisRelay 导出的 JSON；带密钥节点会生成新密钥。</p><textarea id="import-json" class="import-area"></textarea><button id="do-import" class="btn primary">验证并导入</button></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="APP_JS"></script>
+</body>
+</html>

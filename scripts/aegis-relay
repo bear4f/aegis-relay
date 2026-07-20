@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+INSTALL_DIR="/opt/aegis-relay"
+ACTION=${1:-status}
+case "$ACTION" in
+  domain)
+    [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay domain panel.example.com admin@example.com" >&2; exit 1; }
+    exec "$INSTALL_DIR/scripts/configure-domain.sh" "$2" "$3"
+    ;;
+  update)
+    exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh)"
+    ;;
+  logs)
+    cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then exec docker compose logs -f --tail=200; else exec docker-compose logs -f --tail=200; fi
+    ;;
+  status)
+    cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose ps; else docker-compose ps; fi
+    ;;
+  *) echo "用法: aegis-relay {status|logs|update|domain DOMAIN EMAIL}" >&2; exit 1;;
+esac

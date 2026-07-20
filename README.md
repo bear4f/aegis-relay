@@ -9,7 +9,7 @@ https://relay.example.com/r/family/<独立访问密钥>/
 
 上游域名、端口和协议不会出现在客户端地址中。每条路由的密钥只显示一次，服务端仅保留带主密钥的 HMAC 摘要。
 
-> 当前为安全预览版 `0.1.0`。请先在私有仓库和测试服务器中评估，不建议未经审阅直接暴露到公网。
+> 当前为安全预览版 `0.2.0`。首次部署建议先在测试域名验证，再承载正式节点。
 
 ## 设计来源与原创边界
 
@@ -31,12 +31,15 @@ AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离
 - **兼容性请求头**：管理员可设置通用 `User-Agent`、`X-Emby-Client`、设备名称和设备 ID，默认关闭且留有审计记录。
 - **节点首页**：每个节点可选择是否在代理首页展示名称；带密钥节点不会公开密钥。
 - **线路诊断**：管理面展示连续失败、熔断状态、重试时间和最近成功时间，不显示真实上游。
+- **流量治理**：按节点统计请求、播放请求、上下行流量、错误和活动连接；支持 Mbps 限速与月度 GB 配额。
+- **完整控制台**：仪表盘、节点卡片、流量趋势、TLS/Emby 版本诊断、安全审计、配置导入导出和 HTTPS 部署状态集中呈现。
+- **保号提醒**：可配置节点维护周期，通过 Telegram Bot 推送提醒；完成保号后在节点卡片重置周期。
 
 兼容性请求头只适用于你拥有或已获明确授权的 Emby 上游。AegisRelay 不内置第三方客户端冒充模板，也不应用于绕过上游禁止反代、客户端限制或其他访问控制。详见 [节点管理说明](docs/NODE_MANAGEMENT.md)。
 
 ## 安全默认值
 
-- 管理端默认仅监听 `127.0.0.1:9080`，代理端监听 `0.0.0.0:8080`。
+- curl 安装后的初始化阶段临时公开 `9080`；完成域名向导后自动改为仅监听 `127.0.0.1:9080`。
 - 管理员必须使用至少 14 位密码和 TOTP；提供一次性恢复码。
 - 密码使用高成本 `scrypt`，持久数据使用 AES-256-GCM 整体加密。
 - 登录限速、30 分钟会话、HttpOnly + SameSite=Strict Cookie、CSRF Token。
@@ -48,25 +51,67 @@ AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离
 
 详细边界见 [SECURITY.md](SECURITY.md) 与 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)。
 
-## 快速部署
+## 一条 curl 完成安装
 
-要求：Docker、Docker Compose、OpenSSL。
-
-```bash
-./scripts/install.sh
-```
-
-安装器首次运行会生成三个独立随机值，并只显示一次 Setup Token 和随机管理路径。管理端仅发布到宿主机 `127.0.0.1:9080`。推荐用 SSH 隧道完成初始化：
+支持 Debian / Ubuntu。安装器会准备 Docker、下载公开仓库到 `/opt/aegis-relay`、生成独立主密钥、Setup Token 和随机管理路径，然后启动临时初始化入口：
 
 ```bash
-ssh -L 9080:127.0.0.1:9080 user@server
+curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh | sudo sh
 ```
 
-然后访问 `http://127.0.0.1:9080/<随机管理路径>`。若仅通过本地 HTTP 初始化，可临时将 `.env` 中 `SECURE_COOKIES=false`，完成后恢复为 `true` 并置于 HTTPS 反代之后。
+安装结束会显示：
 
-### 生产 HTTPS
+```text
+管理地址: http://服务器公网IP:9080/admin-随机路径
+Setup Token: 一次性随机令牌
+```
 
-管理端建议使用独立域名、mTLS/VPN/IP allowlist，并代理到 `127.0.0.1:9080`。代理端域名转发到 `127.0.0.1:8080`。Nginx 示例见 [deploy/nginx.example.conf](deploy/nginx.example.conf)。不要让 Nginx 记录包含访问密钥的完整 URI。
+在云防火墙/安全组临时放行 TCP 9080，打开该管理地址，设置强密码并绑定 TOTP。初始化期间不要添加正式节点，不要把 Setup Token 发到聊天或工单。
+
+### 域名、Nginx 与自动证书
+
+1. 将域名的 A/AAAA 记录指向服务器。
+2. 安全组放行 TCP 80 和 443。使用 Cloudflare 时，首次签证建议先设为 DNS only。
+3. 完成面板初始化后执行：
+
+```bash
+sudo aegis-relay domain panel.example.com admin@example.com
+```
+
+该命令会依次完成：
+
+- 安装并配置 Nginx；
+- 同一 HTTPS 域名下把随机管理路径转到 `127.0.0.1:9080`，节点路径转到 `127.0.0.1:8080`；
+- 通过 Certbot 申请 Let's Encrypt 证书并强制 HTTP 跳转 HTTPS；
+- 启用 `certbot.timer` 自动续期；
+- 证书成功后把 Docker 的管理端口从 `0.0.0.0:9080` 收回为 `127.0.0.1:9080`；
+- 写入 `PUBLIC_BASE_URL` 并启用 Secure Cookie。
+
+最终管理地址：
+
+```text
+https://panel.example.com/admin-随机路径/
+```
+
+最终客户端节点地址：
+
+```text
+https://panel.example.com/charity/<访问密钥>/
+```
+
+此时外网不能再直接访问 `IP:9080`。可从云安全组删除 9080 放行规则。Nginx 站点关闭 access log，避免路径密钥进入日志。
+
+### 运维命令
+
+```bash
+sudo aegis-relay status
+sudo aegis-relay logs
+sudo aegis-relay update
+systemctl status certbot.timer
+certbot certificates
+```
+
+如果 DNS 或证书申请失败，脚本不会关闭 9080 临时入口；修复后重新执行 `aegis-relay domain`。Nginx 配置校验失败会自动恢复上一份站点配置。
 
 ## 使用流程
 
@@ -75,6 +120,8 @@ ssh -L 9080:127.0.0.1:9080 user@server
 3. 根据节点类型填写主线路和可选播放线路；私网 Emby 必须显式选择“允许私网回源”。
 4. 选择 302 直连或隐私中转策略，保存只显示一次的客户端路径并添加到 Emby 客户端。
 5. 怀疑泄露时点击“轮换密钥”；旧路径立即失效。
+
+详细安装说明见 [部署手册](docs/DEPLOYMENT.md)。
 
 ## 本地开发与验证
 

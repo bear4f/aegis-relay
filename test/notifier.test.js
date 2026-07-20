@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {Notifier} from '../src/notifier.js';
+test('Telegram secrets are validated, encrypted-store ready and never returned',()=>{const store={data:{},save(){this.saved=true}},notifier=new Notifier(store,null);assert.throws(()=>notifier.configure({telegram:{enabled:true,botToken:'bad',chatId:'1'}}));const token='123456:'+('a'.repeat(32));const view=notifier.configure({telegram:{enabled:true,botToken:token,chatId:'-100123456'}});assert.equal(view.telegram.configured,true);assert.equal(JSON.stringify(view).includes(token),false);assert.equal(store.data.notifications.telegram.botToken,token);assert.equal(store.saved,true)});

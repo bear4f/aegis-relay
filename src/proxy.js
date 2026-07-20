@@ -3,6 +3,7 @@ import https from 'node:https';
 import dns from 'node:dns';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP, timingEqual, tokenDigest } from './security.js';
+import { ThrottleTransform } from './metrics.js';
 
 const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
 const RETRY_STATUS = new Set([502, 503, 504]);
@@ -116,7 +117,7 @@ function cleanResponseHeaders(input) {
   out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
 }
 
-export function makeProxyHandler(store, key) {
+export function makeProxyHandler(store, key, metrics = null) {
   return async (req, res) => {
     const incoming=new URL(req.url,'http://relay.invalid');
     if (req.method==='GET' && (incoming.pathname==='/' || incoming.pathname==='/index.html')) {
@@ -126,7 +127,9 @@ export function makeProxyHandler(store, key) {
     const found=routeFor(req,store.data.routes,key);
     if (!found) { res.writeHead(404,{'cache-control':'no-store'}); return res.end('not found'); }
     const {route}=found, playback=isPlaybackPath(found.rest), configured=orderedTargets(route,playback);
-    if (!configured.length) { res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
+    if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
+    const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
+    if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
     const originalHeaders=strip(req.headers); delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
@@ -148,13 +151,13 @@ export function makeProxyHandler(store, key) {
           try { const loc=new URL(out.location,target); if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;else if (loc.origin===base.origin) out.location=`${found.prefix}${loc.pathname}${loc.search}`; }
           catch { delete out.location; }
         }
-        finished=true; res.writeHead(status,out); upRes.pipe(res);
+        finished=true; const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};res.once('finish',finishMetric);res.once('close',finishMetric);res.writeHead(status,out);upRes.pipe(counter).pipe(res);
       });
       up.on('timeout',()=>up.destroy(new Error('upstream timeout')));
       up.on('error',err=>{
         markFailure(route,targetValue,err.message);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
-        if (!finished) { finished=true; res.writeHead(502,{'cache-control':'no-store'}); res.end('bad gateway'); }
+        if (!finished) { finished=true;metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); res.end('bad gateway'); }
       });
       if (canRetry) up.end(); else req.pipe(up);
     };
