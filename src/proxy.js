@@ -138,6 +138,13 @@ function externalRedirectPath(location, base) {
   return null;
 }
 
+function publicRequestContext(req) {
+  const host=String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim();
+  const forwarded=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim().toLowerCase();
+  const proto=forwarded==='https'||forwarded==='http'?forwarded:(req.socket.encrypted?'https':'http');
+  return {host,proto};
+}
+
 function cleanResponseHeaders(input) {
   const out=strip(input); delete out.server; delete out.via; delete out['x-powered-by'];
   stripAdminSetCookies(out);out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
@@ -156,10 +163,13 @@ export function makeProxyHandler(store, key, metrics = null) {
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
-    // Present as a direct client to the upstream. Advertising a proxy host/scheme makes Emby
-    // emit absolute stream URLs that omit this node's /alias/key/ sub-path, which breaks playback.
+    // Mirror the proven Nginx gateway: advertise the public host/scheme so the upstream builds
+    // correct redirects, but strip the client IP for privacy.
+    const publicContext=publicRequestContext(req);
     const originalHeaders=stripAdminCredentials(strip(req.headers));
-    delete originalHeaders['x-forwarded-for']; delete originalHeaders['x-forwarded-proto']; delete originalHeaders.forwarded;
+    delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; delete originalHeaders['x-real-ip'];
+    if(publicContext.host)originalHeaders['x-forwarded-host']=publicContext.host;
+    originalHeaders['x-forwarded-proto']=publicContext.proto;
     applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
@@ -168,8 +178,11 @@ export function makeProxyHandler(store, key, metrics = null) {
       const target=redirectFrom || joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (target.origin!==base.origin) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
-      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,timeout:30_000,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate)};
+      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate)};
+      // Short guard for the TCP connect only; once connected, allow a long idle window so slow
+      // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
+        clearTimeout(connectTimer);
         const status=upRes.statusCode||502;
         if (canRetry && RETRY_STATUS.has(status) && index+1<configured.length) { markFailure(route,targetValue,`HTTP ${status}`); upRes.resume(); return attempt(configured[index+1],index+1); }
         if (canRetry && !route.directStream && REDIRECT_STATUS.has(status) && upRes.headers.location && redirects<5) {
@@ -183,15 +196,19 @@ export function makeProxyHandler(store, key, metrics = null) {
             if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;
             else if(loc.origin===base.origin){
               const redirectedPath=externalRedirectPath(loc,base);
-              out.location=redirectedPath===null?loc.href:`${found.prefix}${redirectedPath}${loc.search}${loc.hash}`;
+              // Emit an ABSOLUTE Location back through this gateway — several Emby clients reject relative ones.
+              out.location=redirectedPath===null?loc.href:(publicContext.host?`${publicContext.proto}://${publicContext.host}${found.prefix}${redirectedPath}${loc.search}${loc.hash}`:`${found.prefix}${redirectedPath}${loc.search}${loc.hash}`);
             }
           }
           catch { delete out.location; }
         }
         finished=true; const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};res.once('finish',finishMetric);res.once('close',finishMetric);res.writeHead(status,out);upRes.pipe(counter).pipe(res);
       });
-      up.on('timeout',()=>up.destroy(new Error('upstream timeout')));
+      const connectTimer=setTimeout(()=>up.destroy(new Error('connect timeout')),20_000);
+      up.on('socket',s=>{if(s.connecting)s.once('connect',()=>clearTimeout(connectTimer));else clearTimeout(connectTimer)});
+      up.setTimeout(3600_000,()=>up.destroy(new Error('upstream idle timeout')));
       up.on('error',err=>{
+        clearTimeout(connectTimer);
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
         if (!finished) { finished=true;metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store','content-type':'text/plain; charset=utf-8'}); res.end(`Bad Gateway\n${reason}`); }
@@ -205,8 +222,9 @@ export function makeProxyHandler(store, key, metrics = null) {
 export function handleUpgrade(req, socket, head, store, key) {
   const found=routeFor(req,store.data.routes,key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), headers=stripAdminCredentials(strip(req.headers));
-  delete headers['x-forwarded-for']; delete headers['x-forwarded-proto']; delete headers.forwarded; applyClientProfile(headers,found.route.clientProfile);
+  const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
+  delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,found.route.clientProfile);
+  if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;
   const up=transport.request({hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});
