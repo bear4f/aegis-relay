@@ -1,9 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
-import dns from 'node:dns';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP, timingEqual, tokenDigest } from './security.js';
 import { ThrottleTransform } from './metrics.js';
+import { guardedLookup } from './lookup.js';
 
 const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
 const RETRY_STATUS = new Set([502, 503, 504]);
@@ -94,15 +94,6 @@ export function getRuntimeStatus(routes) {
   return routes.map(route => ({ id:route.id, alias:route.alias, upstreams:[...normalizedUpstreams(route),...normalizedUpstreams(route,true).filter(x=>!normalizedUpstreams(route).includes(x))].map(target=>{
     const s=stateFor(route,target); return { target:'[encrypted upstream]', failures:s.failures, circuitOpen:s.openUntil>Date.now(), retryAt:s.openUntil?new Date(s.openUntil).toISOString():null, lastSuccess:s.lastSuccess, lastError:s.lastError };
   }) }));
-}
-
-function guardedLookup(allowPrivate) {
-  return (host, opts, cb) => dns.lookup(host, { ...opts, all:true }, (err, list) => {
-    if (err) return cb(err);
-    const safe=allowPrivate?list:list.filter(x=>!isPrivateIP(x.address));
-    if (!safe.length) return cb(new Error('upstream resolved to a blocked address'));
-    cb(null,safe[0].address,safe[0].family);
-  });
 }
 
 function applyClientProfile(headers, profile = {}) {

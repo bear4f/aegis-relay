@@ -1,9 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
-import dns from 'node:dns';
-import { isPrivateIP } from './security.js';
-
-function guardedLookup(allowPrivate){return(host,opts,cb)=>dns.lookup(host,{...opts,all:true},(err,list)=>{if(err)return cb(err);const safe=allowPrivate?list:list.filter(x=>!isPrivateIP(x.address));if(!safe.length)return cb(new Error('resolved address is blocked'));cb(null,safe[0].address,safe[0].family)})}
+import { guardedLookup } from './lookup.js';
 
 export function probe(value,{allowPrivate=false,tlsVerify=true,timeout=8000}={}){
   return new Promise(resolve=>{const started=Date.now(),url=new URL(value),transport=url.protocol==='https:'?https:http;let settled=false;
