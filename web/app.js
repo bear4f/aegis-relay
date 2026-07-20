@@ -1,4 +1,6 @@
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)], base=location.pathname.replace(/\/$/,'')+'/api';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const scriptPath=new URL(document.currentScript?.src||location.href).pathname;
+const base=scriptPath.endsWith('/app.js')?scriptPath.replace(/\/app\.js$/,'/api'):location.pathname.replace(/\/$/,'')+'/api';
 const state={csrf:'',routes:[],dashboard:null,editing:null,page:'dashboard'};
 const titles={dashboard:'仪表盘',nodes:'节点管理',traffic:'流量统计',diagnostics:'故障诊断',audit:'安全审计',notifications:'通知提醒',deployment:'部署向导'};
 // One-click client-identity templates for authorized upstreams. Device ID stays untouched so it remains unique per install.
@@ -12,7 +14,25 @@ const UA_PRESETS=[
   {name:'VidHub',userAgent:'VidHub/1.9 (iOS 17)',client:'VidHub',deviceName:'VidHub'},
 ];
 
-async function call(path,options={}){options.headers={'content-type':'application/json',...(state.csrf?{'x-csrf-token':state.csrf}:{}),...(options.headers||{})};const response=await fetch(base+path,options),data=await response.json();if(!response.ok)throw Error(data.error||'请求失败');return data}
+function showLogin(message='登录已失效，请重新登录'){
+  state.csrf='';
+  $('#app').classList.add('hidden');
+  $('#auth').classList.remove('hidden');
+  $('#setup').classList.add('hidden');
+  $('#login').classList.remove('hidden');
+  $('#gate-msg').textContent=message;
+}
+async function call(path,options={}){
+  options.headers={'content-type':'application/json',...(state.csrf?{'x-csrf-token':state.csrf}:{}),...(options.headers||{})};
+  const response=await fetch(base+path,options),type=String(response.headers.get('content-type')||''),raw=await response.text();
+  let data={};
+  if(type.includes('application/json')){try{data=raw?JSON.parse(raw):{}}catch{throw Error('管理接口返回了损坏的数据，请刷新页面后重试')}}
+  else if(response.status===401&&path!=='/login'){showLogin();throw Error('登录已失效，请重新登录')}
+  else throw Error(response.ok?'管理接口地址异常，请刷新页面后重试':'服务刚完成更新或暂时不可用，请稍后刷新重试');
+  if(response.status===401&&path!=='/login'){showLogin();throw Error('登录已失效，请重新登录')}
+  if(!response.ok)throw Error(data.error||'请求失败');
+  return data;
+}
 const value=id=>$(id).value, bool=id=>value(id)==='true', escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(message,error=false){const el=$('#toast');el.textContent=message;el.classList.remove('hidden');el.classList.toggle('error',error);clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.add('hidden'),3200)}
 function bytes(n=0){const units=['B','KB','MB','GB','TB'];let i=0;n=Number(n)||0;while(n>=1024&&i<units.length-1){n/=1024;i++}return`${n>=10||i===0?n.toFixed(0):n.toFixed(1)} ${units[i]}`}
@@ -22,7 +42,7 @@ function showSecret(content){$('#secret').textContent=content;$('#modal').classL
 async function start(){try{const status=await call('/status');$(status.initialized?'#login':'#setup').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}}
 $('#setup-btn').onclick=async()=>{try{const data=await call('/setup',{method:'POST',body:JSON.stringify({username:value('#su-user'),password:value('#su-pass'),setupToken:value('#su-token')})});showSecret(`TOTP Secret\n${data.secret}\n\n恢复码（每行一个）\n${data.recovery.join('\n')}\n\n配置 URI\n${data.totpUri}`);$('#setup').classList.add('hidden');$('#login').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}};
 $('#login-btn').onclick=async()=>{try{const data=await call('/login',{method:'POST',body:JSON.stringify({password:value('#password'),code:value('#code')})});state.csrf=data.csrf;$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');await refreshAll();streamDashboard()}catch(e){$('#gate-msg').textContent=e.message}};
-$('#logout').onclick=async()=>{await call('/logout',{method:'POST',body:'{}'});location.reload()};
+$('#logout').onclick=async()=>{try{await call('/logout',{method:'POST',body:'{}'})}finally{location.reload()}};
 
 async function refreshAll(){const [routes,dashboard]=await Promise.all([call('/routes'),call('/dashboard')]);state.routes=routes.routes;state.dashboard=dashboard;renderRoutes();renderDashboard(dashboard);renderTraffic(dashboard);fillDiagnosticNodes()}
 function renderDashboard(data){$('#m-nodes').textContent=state.routes.length;$('#m-running').textContent=`${data.running} 个运行中`;$('#m-traffic').textContent=bytes(data.totalBytes);$('#m-requests').textContent=Number(data.totalRequests).toLocaleString();$('#m-active').textContent=`${data.active} 个活动连接`;$('#m-uptime').textContent=uptime(data.startedAt);const days=Object.entries(data.daily||{}).slice(-14),max=Math.max(1,...days.map(x=>x[1]));$('#traffic-chart').innerHTML=days.length?days.map(([day,n])=>`<div class="bar" title="${day} · ${bytes(n)}" style="height:${Math.max(4,n/max*100)}%"><span>${day.slice(5)}</span></div>`).join(''):'<div class="empty-state"><p>产生代理流量后显示趋势</p></div>';const metrics=new Map(data.nodes.map(x=>[x.id,x]));$('#dashboard-nodes').innerHTML=state.routes.slice(0,6).map(r=>{const m=metrics.get(r.id)||{};return`<div class="mini-row"><div><strong><i class="status-dot ${r.enabled?'':'off'}"></i>${escapeHtml(r.name)}</strong><small>/${escapeHtml(r.alias)}/ · ${bytes(m.bytesOut)}</small></div><span class="pill">${m.active||0} 活动</span></div>`}).join('')||'<div class="empty-state"><p>还没有节点</p></div>'}
@@ -64,5 +84,5 @@ $('#import-btn').onclick=()=>$('#import-modal').classList.remove('hidden');$('#c
 $('#close-modal').onclick=()=>$('#modal').classList.add('hidden');$('#copy-secret').onclick=async()=>{await navigator.clipboard.writeText($('#secret').textContent);toast('已复制到剪贴板')};
 $('#save-notifications').onclick=async()=>{try{await call('/notifications',{method:'PUT',body:JSON.stringify({telegram:{enabled:$('#telegram-enabled').checked,botToken:value('#telegram-token'),chatId:value('#telegram-chat')}})});toast('通知设置已保存');await loadNotifications()}catch(e){toast(e.message,true)}};$('#test-notifications').onclick=async()=>{try{await call('/notifications/test',{method:'POST',body:'{}'});toast('测试消息已发送')}catch(e){toast(e.message,true)}};
 
-async function streamDashboard(){try{const response=await fetch(base+'/events',{headers:{'x-csrf-token':state.csrf}}),reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const chunks=buffer.split('\n\n');buffer=chunks.pop();for(const chunk of chunks){const line=chunk.split('\n').find(x=>x.startsWith('data: '));if(line){state.dashboard=JSON.parse(line.slice(6));renderDashboard(state.dashboard);renderTraffic(state.dashboard)}}}}catch{$('#live-state').innerHTML='<i></i>重连中';setTimeout(streamDashboard,5000)}}
+async function streamDashboard(){if(!state.csrf)return;try{const response=await fetch(base+'/events',{headers:{'x-csrf-token':state.csrf}});if(response.status===401){showLogin();return}if(!response.ok||!String(response.headers.get('content-type')||'').includes('text/event-stream'))throw Error('event stream unavailable');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const{done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const chunks=buffer.split('\n\n');buffer=chunks.pop();for(const chunk of chunks){const line=chunk.split('\n').find(x=>x.startsWith('data: '));if(line){state.dashboard=JSON.parse(line.slice(6));renderDashboard(state.dashboard);renderTraffic(state.dashboard)}}}}catch{if(!state.csrf)return;$('#live-state').innerHTML='<i></i>重连中';setTimeout(streamDashboard,5000)}}
 start();
