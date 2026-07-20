@@ -1,0 +1,20 @@
+services:
+  aegis-relay:
+    build: .
+    restart: unless-stopped
+    read_only: true
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9080:9080"
+    volumes:
+      - ./data:/app/data
+    env_file: .env
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9080/'+process.env.ADMIN_PATH+'/api/status').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

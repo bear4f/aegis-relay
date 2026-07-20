@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {Store} from '../src/store.js';import {deriveKey} from '../src/security.js';
+test('encrypted store round trips without plaintext leakage',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aegis-')),file=path.join(dir,'db');const key=deriveKey('k'.repeat(32)),s=new Store(file,key);s.data.routes.push({upstream:'https://secret.example'});s.save();assert.equal(fs.readFileSync(file,'utf8').includes('secret.example'),false);assert.equal(new Store(file,key).data.routes[0].upstream,'https://secret.example');fs.rmSync(dir,{recursive:true})});
