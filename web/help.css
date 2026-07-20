@@ -1,0 +1,66 @@
+.form-section.first {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.simple-form {
+  margin-top: 18px;
+}
+
+.advanced-settings {
+  margin-top: 22px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #0a1018;
+}
+
+.advanced-settings summary {
+  padding: 16px 18px;
+  cursor: pointer;
+  color: #c7d0dc;
+  font-weight: 750;
+  list-style: none;
+}
+
+.advanced-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-settings summary::before {
+  content: "+";
+  display: inline-block;
+  width: 24px;
+  color: var(--accent);
+}
+
+.advanced-settings[open] summary::before {
+  content: "−";
+}
+
+.advanced-settings summary span {
+  float: right;
+  color: #65748a;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.advanced-settings > .form-grid,
+.advanced-settings > .form-section {
+  margin: 0 18px 18px;
+}
+
+.node-actions {
+  flex-wrap: wrap;
+}
+
+.node-actions .view-node {
+  border-color: #31594f;
+  color: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .advanced-settings summary span {
+    display: none;
+  }
+}

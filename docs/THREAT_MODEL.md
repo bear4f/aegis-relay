@@ -14,7 +14,7 @@
 |---|---|---|
 | 管理员撞库 | scrypt、TOTP、登录限速、短会话 | 主机被控后无法保护 |
 | CSRF/XSS | CSRF token、Strict cookie、CSP、DOM textContent | 浏览器扩展仍可能读取页面 |
-| 客户端 URL 泄露 | 单路由随机密钥、只存摘要、no-referrer、无 URI 日志、快速轮换 | 外层代理和客户端可能记录 |
+| 客户端 URL 泄露 | 单路由随机密码、加密存储、HMAC 校验、no-referrer、无 URI 日志、快速轮换 | 已登录管理员、外层代理和客户端可能读取完整地址 |
 | SSRF/云元数据访问 | URL 解析、默认拒绝私网/环回/链路本地、禁止 URL 凭据 | 显式允许私网后风险上升 |
 | 数据文件被读取 | AES-256-GCM、0600、Docker 只读根文件系统 | 主密钥同时泄露时失效 |
 | 上游身份泄露 | 不转发 Forwarded/XFF、覆盖 Host、清理 hop-by-hop 头 | Emby 自身可识别代理出口 IP |

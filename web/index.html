@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>AegisRelay · Emby Gateway</title>
   <link rel="stylesheet" href="STYLE_CSS">
+  <link rel="stylesheet" href="HELP_CSS">
 </head>
 <body>
   <section id="auth" class="auth-shell">
@@ -50,7 +51,7 @@
         <div class="dashboard-grid"><article class="panel chart-panel"><div class="panel-head"><div><span class="eyebrow">最近 14 天</span><h3>流量趋势</h3></div><span class="muted">每日下行流量</span></div><div id="traffic-chart" class="bar-chart"></div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">需要关注</span><h3>节点状态</h3></div><button data-jump="nodes" class="link-btn">查看全部</button></div><div id="dashboard-nodes" class="mini-list"></div></article></div>
       </section>
 
-      <section id="nodes-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ROUTE DIRECTORY</span><h2>节点管理</h2><p>管理短路径、主/播放线路、访问密钥与流量策略。</p></div><div class="inline-actions"><button id="export-btn" class="btn ghost">导出配置</button><button id="import-btn" class="btn ghost">批量导入</button><button class="btn primary add-node">＋ 新增节点</button></div></div><div id="node-grid" class="node-grid"></div></section>
+      <section id="nodes-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ROUTE DIRECTORY</span><h2>节点管理</h2><p>创建客户端地址，并管理备用线路、播放方式和流量策略。</p></div><div class="inline-actions"><button id="export-btn" class="btn ghost">导出配置</button><button id="import-btn" class="btn ghost">批量导入</button><button class="btn primary add-node">＋ 新增节点</button></div></div><div id="node-grid" class="node-grid"></div></section>
 
       <section id="traffic-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">BANDWIDTH CONTROL</span><h2>流量统计</h2><p>按节点查看请求、播放流量、月度配额与限速策略。</p></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>节点</th><th>请求</th><th>播放请求</th><th>总流量</th><th>本月流量 / 配额</th><th>限速</th><th>错误</th></tr></thead><tbody id="traffic-table"></tbody></table></div></article></section>
 
@@ -66,12 +67,33 @@
 
   <div id="drawer-backdrop" class="backdrop hidden"></div>
   <aside id="node-drawer" class="drawer hidden"><div class="drawer-head"><div><span class="eyebrow">NODE EDITOR</span><h2 id="form-title">新增 Emby 节点</h2></div><button id="close-drawer" class="icon-btn">×</button></div><div class="drawer-body">
-    <div class="form-grid"><label>展示名称<input id="name" placeholder="家庭媒体库"></label><label>唯一短路径<input id="alias" placeholder="home"></label><label class="full">标签<input id="tags" placeholder="公益服, 国内, 4K"></label><label class="full">备注<textarea id="notes" placeholder="仅管理员可见"></textarea></label><label class="full">主上游线路<textarea id="upstreams" placeholder="https://line-a.example.com&#10;https://line-b.example.com"></textarea><small>分号或换行分隔，最多 8 条</small></label><label class="full">播放专用线路<textarea id="playback-upstreams" placeholder="前后端分离时填写"></textarea></label><label>访问保护<select id="access-mode"><option value="key">独立访问密钥</option><option value="alias_only">仅别名</option></select></label><label>302 策略<select id="direct-stream"><option value="false">隐私中转</option><option value="true">客户端直连</option></select></label><label>私网回源<select id="private"><option value="false">阻止</option><option value="true">明确允许</option></select></label><label>TLS 验证<select id="tls"><option value="true">开启</option><option value="false">关闭（高风险）</option></select></label><label>网关首页<select id="show-home"><option value="false">隐藏</option><option value="true">展示名称</option></select></label><label>收藏节点<select id="favorite"><option value="false">否</option><option value="true">置顶</option></select></label><label>限速 Mbps<input id="speed-limit" type="number" min="0" placeholder="0 = 不限速"></label><label>月配额 GB<input id="monthly-quota" type="number" min="0" placeholder="0 = 不限额"></label><label>保号周期（天）<input id="reminder-days" type="number" min="0" max="365" placeholder="0 = 不提醒"></label></div>
-    <div class="form-section"><div><h3>获授权的客户端兼容</h3><p>只改写声明字段，不修改 Emby 认证 Token。</p></div><label class="switch-row"><span>启用兼容请求头</span><input id="profile-enabled" type="checkbox"></label><div class="form-grid"><label>User-Agent<input id="profile-ua"></label><label>X-Emby-Client<input id="profile-client"></label><label>设备名称<input id="profile-device"></label><label>设备 ID<input id="profile-device-id"></label></div></div>
+    <div class="form-section first"><div><h3>基础设置</h3><p>通常只需要填写名称、短路径和上游地址。</p></div></div>
+    <div class="form-grid simple-form">
+      <label>节点名称<input id="name" placeholder="例如：家庭媒体库"><small>只在管理面板中用于区分节点。</small></label>
+      <label>客户端短路径<input id="alias" placeholder="例如：home"><small>客户端地址中简短易记的一段。</small></label>
+      <label class="full">Emby 上游地址<textarea id="upstreams" placeholder="https://emby-origin.example.com"></textarea><small>填写真实 Emby 地址；有备用线路时换行填写，最多 8 条。</small></label>
+      <label>连接密码<select id="access-mode"><option value="key">开启（推荐，防止他人盗用）</option><option value="alias_only">关闭（知道短路径即可访问）</option></select><small>开启后自动生成密码，管理员可随时查看完整地址。</small></label>
+      <label>遇到 302 播放跳转时<select id="direct-stream"><option value="false">由本机中转（隐私优先）</option><option value="true">让客户端直连（更快、省流量）</option></select><small>不确定时保持“由本机中转”。</small></label>
+    </div>
+    <details class="advanced-settings"><summary>高级设置 <span>一般保持默认即可</span></summary>
+      <div class="form-grid">
+        <label class="full">播放专用上游<textarea id="playback-upstreams" placeholder="仅前后端分离的 Emby 服务器需要填写"></textarea><small>留空时播放和普通请求都使用上面的 Emby 上游。</small></label>
+        <label>上游是否位于内网<select id="private"><option value="false">否（默认）</option><option value="true">是，允许私网地址</option></select><small>只有 192.168.x.x、10.x.x.x 等自有内网地址才开启。</small></label>
+        <label>验证上游 HTTPS 证书<select id="tls"><option value="true">开启（推荐）</option><option value="false">关闭（仅临时排障）</option></select><small>关闭会降低回源连接安全性。</small></label>
+        <label>在网关首页显示<select id="show-home"><option value="false">不显示（更私密）</option><option value="true">显示节点名称</option></select></label>
+        <label>在管理列表置顶<select id="favorite"><option value="false">不置顶</option><option value="true">置顶</option></select></label>
+        <label>节点标签<input id="tags" placeholder="家庭, 4K"></label>
+        <label>限速 Mbps<input id="speed-limit" type="number" min="0" placeholder="0 = 不限速"></label>
+        <label>月配额 GB<input id="monthly-quota" type="number" min="0" placeholder="0 = 不限额"></label>
+        <label>维护提醒周期（天）<input id="reminder-days" type="number" min="0" max="365" placeholder="0 = 不提醒"></label>
+        <label class="full">管理员备注<textarea id="notes" placeholder="仅管理员可见"></textarea></label>
+      </div>
+      <div class="form-section"><div><h3>获授权的客户端兼容</h3><p>仅用于你拥有或已获授权的上游；不会修改 Emby 登录凭据。</p></div><label class="switch-row"><span>启用兼容请求头</span><input id="profile-enabled" type="checkbox"></label><div class="form-grid"><label>User-Agent<input id="profile-ua"></label><label>X-Emby-Client<input id="profile-client"></label><label>设备名称<input id="profile-device"></label><label>设备 ID<input id="profile-device-id"></label></div></div>
+    </details>
   </div><div class="drawer-foot"><button id="cancel-edit" class="btn ghost">取消</button><button id="save-node" class="btn primary">创建节点</button></div></aside>
 
-  <div id="modal" class="modal hidden"><div class="modal-card"><button id="close-modal" class="icon-btn">×</button><span class="eyebrow">ONE-TIME SECRET</span><h2>请立即安全保存</h2><p>访问密钥和恢复码不会再次明文显示。</p><pre id="secret"></pre><button id="copy-secret" class="btn primary">复制内容</button></div></div>
-  <div id="import-modal" class="modal hidden"><div class="modal-card"><button id="close-import" class="icon-btn">×</button><span class="eyebrow">BULK IMPORT</span><h2>导入节点配置</h2><p>粘贴 AegisRelay 导出的 JSON；带密钥节点会生成新密钥。</p><textarea id="import-json" class="import-area"></textarea><button id="do-import" class="btn primary">验证并导入</button></div></div>
+  <div id="modal" class="modal hidden"><div class="modal-card"><button id="close-modal" class="icon-btn">×</button><span class="eyebrow">SECURE INFORMATION</span><h2>安全信息</h2><p>节点地址可由管理员再次查看；2FA 恢复码仍只显示一次。</p><pre id="secret"></pre><button id="copy-secret" class="btn primary">复制内容</button></div></div>
+  <div id="import-modal" class="modal hidden"><div class="modal-card"><button id="close-import" class="icon-btn">×</button><span class="eyebrow">BULK IMPORT</span><h2>导入节点配置</h2><p>粘贴 AegisRelay 导出的 JSON；启用连接密码的节点会生成新密码。</p><textarea id="import-json" class="import-area"></textarea><button id="do-import" class="btn primary">验证并导入</button></div></div>
   <div id="toast" class="toast hidden"></div>
   <script src="APP_JS"></script>
 </body>
