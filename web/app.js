@@ -91,7 +91,7 @@ function renderRoutes(){
   body.querySelectorAll('tr').forEach(row=>{const r=state.routes.find(x=>x.id===row.dataset.id);if(!r)return;
     row.querySelector('.test-node').onclick=()=>testConnection(r,row);
     row.querySelector('.addr-copy').onclick=async()=>{try{await navigator.clipboard.writeText(await nodeUrl(r));toast('客户端地址已复制')}catch(e){toast(e.message,true)}};
-    row.querySelector('.addr-reveal').onclick=async()=>{const el=row.querySelector('.addr-text');if(el.dataset.shown){el.textContent=ADDR_MASK;el.dataset.shown=''}else{el.textContent='加载中…';try{el.textContent=await nodeUrl(r);el.dataset.shown='1'}catch(e){el.textContent=ADDR_MASK;toast(e.message,true)}}};
+    row.querySelector('.addr-reveal').onclick=async()=>{const el=row.querySelector('.addr-text'),wrap=row.querySelector('.cell-addr');if(el.dataset.shown){el.textContent=ADDR_MASK;el.dataset.shown='';wrap.classList.remove('shown')}else{el.textContent='加载中…';try{el.textContent=await nodeUrl(r);el.dataset.shown='1';wrap.classList.add('shown')}catch(e){el.textContent=ADDR_MASK;toast(e.message,true)}}};
     row.querySelector('.toggle-node').onclick=()=>patchRoute(r,{enabled:!r.enabled});
     row.querySelector('.star').onclick=()=>patchRoute(r,{favorite:!r.favorite});
     row.querySelector('.edit-node').onclick=()=>openDrawer(r);

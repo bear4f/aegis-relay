@@ -597,3 +597,6 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .traffic-track i{position:absolute;left:0;right:0;bottom:0;width:auto;display:block}
 /* the grid-era rule left align-items:center + gap behind, collapsing the track to zero width */
 .traffic-day{align-items:stretch;gap:0}
+/* a revealed client address must be fully readable on desktop and mobile */
+.cell-addr.shown{max-width:none}
+.cell-addr.shown code{white-space:normal;word-break:break-all;overflow:visible;text-overflow:clip;line-height:1.45}
