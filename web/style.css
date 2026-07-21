@@ -564,3 +564,36 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .data-table th:nth-child(4),.data-table td:nth-child(4){width:135px}
 .row-actions .btn{padding:6px 9px;font-size:10.5px}
 .data-table{min-width:820px}
+
+/* ============================================================
+   Daily traffic — real column chart (bar length must track value)
+   ============================================================ */
+.bar-chart.traffic-bars{display:flex;align-items:stretch;gap:6px;height:196px;padding:10px 0 0}
+.traffic-day{flex:1;min-width:0;display:flex;flex-direction:column;grid-template-columns:none;padding:0}
+.traffic-track{flex:1;display:flex;align-items:flex-end;height:auto;background:transparent;
+  border-radius:0;overflow:visible}
+.traffic-track i{width:100%;height:auto;border-radius:6px 6px 3px 3px;
+  background:linear-gradient(180deg,var(--accent),#5aa3d6);transition:height .8s var(--ease)}
+.traffic-day.empty .traffic-track{border-bottom:2px solid var(--surface-3);border-radius:2px}
+.traffic-day>small{text-align:center;margin-top:9px;color:var(--text-3);font-size:10px;white-space:nowrap}
+.traffic-day:hover .traffic-track i{filter:brightness(1.1)}
+
+/* ============================================================
+   Machine tiles — stop the cramped text wrapping
+   ============================================================ */
+.machine-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.machine-title strong{display:flex;align-items:center;font-size:13px;color:var(--text)}
+.machine-title small{display:block;margin-top:4px;color:var(--text-3);font-size:11px;
+  font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.machine-title .tag-row{margin:0;flex-shrink:0;justify-content:flex-end}
+.machine-title .pill{font-size:9.5px;padding:3px 8px}
+.machine-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin-top:12px}
+.machine-stats div{flex:none;min-width:0}
+.machine-stats small{white-space:nowrap;font-size:9px}
+.machine-stats strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.machine-share{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);line-height:1.5}
+/* percentage height needs a positioned parent to resolve against */
+.traffic-track{position:relative;min-height:0}
+.traffic-track i{position:absolute;left:0;right:0;bottom:0;width:auto;display:block}
+/* the grid-era rule left align-items:center + gap behind, collapsing the track to zero width */
+.traffic-day{align-items:stretch;gap:0}
