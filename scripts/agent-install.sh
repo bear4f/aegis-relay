@@ -34,6 +34,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" -o "$TMP_DIR/source.tar.gz"
 mkdir -p "$TMP_DIR/source" "$INSTALL_DIR/data"
 tar -xzf "$TMP_DIR/source.tar.gz" -C "$TMP_DIR/source" --strip-components=1
+# Report the version of the code actually built, so the panel can spot machines running old builds.
+SOURCE_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP_DIR/source/package.json" | head -n1)
 cp "$TMP_DIR/source/Dockerfile.agent" "$TMP_DIR/source/compose.agent.yml" "$TMP_DIR/source/package.json" "$INSTALL_DIR/"
 rm -rf "$INSTALL_DIR/src"; cp -a "$TMP_DIR/source/src" "$INSTALL_DIR/src"
 chown -R 10001:10001 "$INSTALL_DIR/data"; chmod 700 "$INSTALL_DIR/data"
@@ -52,7 +54,7 @@ rm -f "$TOKEN_ENV"; TOKEN=
   printf 'PANEL_URL=%s\n' "$PANEL"
   printf 'AGENT_DOMAIN=%s\n' "$DOMAIN"
   printf 'AGENT_EMAIL=%s\n' "$EMAIL"
-  printf 'AGENT_VERSION=0.8.0\n'
+  printf 'AGENT_VERSION=%s\n' "$SOURCE_VERSION"
   printf 'AGENT_PROXY_PUBLISH_IP=127.0.0.1\n'
 } > .env
 chmod 600 .env
