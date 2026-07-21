@@ -11,14 +11,6 @@ https://relay.example.com/r/family/<独立访问密钥>/
 
 > 当前为安全预览版 `0.8.0`。首次部署建议先在测试域名验证，再承载正式节点。
 
-## 设计来源与原创边界
-
-本项目在获得用户授权的前提下，研究了以下公开项目的产品思路，但没有复制其源码、品牌、界面或素材：
-
-- `bear4f/emby-proxy-toolbox`：部署友好、WebSocket/Range 支持、回滚和客户端兼容思路。
-- `hkfires/EmbyProxy`：多节点、节点级密钥、TOTP 和轻量部署思路。
-- `snnabb/Meridian`：单服务管理、诊断、双上游和安全文档思路。
-
 AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离的管理/代理监听器以及 capability URL 模型。
 
 ## 节点管理能力
