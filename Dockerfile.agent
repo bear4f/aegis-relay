@@ -1,0 +1,12 @@
+FROM node:22-alpine
+ARG AEGIS_UID=10001
+ARG AEGIS_GID=10001
+RUN addgroup -S -g "$AEGIS_GID" aegis \
+    && adduser -S -D -H -u "$AEGIS_UID" -G aegis aegis \
+    && mkdir -p /app/agent-data \
+    && chown aegis:aegis /app/agent-data
+WORKDIR /app
+COPY --chown=aegis:aegis package.json ./
+COPY --chown=aegis:aegis src ./src
+USER aegis
+CMD ["node","src/agent-main.js"]

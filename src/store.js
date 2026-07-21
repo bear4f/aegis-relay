@@ -5,7 +5,7 @@ import { LEGACY_ROUTE_AUTH_VERSION, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTo
 import { ensureAgentRegistry } from './agent-registry.js';
 
 export const STORE_SCHEMA_VERSION = 3;
-const EMPTY = { version: 1, schemaVersion: STORE_SCHEMA_VERSION, admin: null, routes: [], agents: [], deployments: [], audit: [], sessions: {} };
+const EMPTY = { version: 1, schemaVersion: STORE_SCHEMA_VERSION, admin: null, routes: [], agents: [], deployments: [], enrollmentTokens: [], audit: [], sessions: {} };
 
 export function migrationBackupPath(file, sourceVersion=1) {
   return `${file}.schema-v${sourceVersion}.bak`;
@@ -97,7 +97,7 @@ export function restoreMigrationBackup(file, key, sourceVersion=1) {
 }
 
 export class Store {
-  constructor(file, key) { this.file = file; this.key = key; this.data = structuredClone(EMPTY); this.load(); this.migration = this.migrate(); }
+  constructor(file, key) { this.file = file; this.key = key; this.data = structuredClone(EMPTY); this.load(); this.migration = this.migrate(); if(!Array.isArray(this.data.enrollmentTokens))this.data.enrollmentTokens=[]; }
   load() {
     if (!fs.existsSync(this.file)) return;
     this.data = decryptStore(fs.readFileSync(this.file, 'utf8'), this.key);

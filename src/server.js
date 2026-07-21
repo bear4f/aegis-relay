@@ -14,8 +14,10 @@ import { customConnectionKey } from './connection-key.js';
 import { isRouteAuthKey, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from './route-auth.js';
 import { LocalAgent } from './local-agent.js';
 import { ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgent, removeRouteDeployments, replaceAgentDeployments } from './agent-registry.js';
+import { AgentApi, enrollmentInstallCommand, issueEnrollment } from './agent-api.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const APP_VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'),'utf8')).version;
 const cfg = {
   adminHost: process.env.ADMIN_HOST || '127.0.0.1', adminPort: +(process.env.ADMIN_PORT || 9080),
   proxyHost: process.env.PROXY_HOST || '0.0.0.0', proxyPort: +(process.env.PROXY_PORT || 8080),
@@ -25,6 +27,7 @@ const cfg = {
 };
 const key = deriveKey(process.env.APP_MASTER_KEY); const store = new Store(cfg.dataFile, key);
 const localAgent = new LocalAgent({store}); localAgent.start();
+const agentApi = new AgentApi({store,version:APP_VERSION});
 const metrics = new Metrics(store);
 const notifier = new Notifier(store,metrics);
 const sessions = store.data.sessions && typeof store.data.sessions === 'object' && !Array.isArray(store.data.sessions) ? store.data.sessions : {};
@@ -32,10 +35,11 @@ store.data.sessions = sessions;
 function pruneSessions(){const now=Date.now();for(const [sid,session] of Object.entries(sessions))if(!session||Number(session.expires)<now)delete sessions[sid];for(const [sid] of Object.entries(sessions).sort((a,b)=>Number(b[1].expires)-Number(a[1].expires)).slice(16))delete sessions[sid]}
 pruneSessions();
 const loginLimiter = new RateLimiter(6, 5 * 60_000);
-const ui = fs.readFileSync(path.join(ROOT, 'web', 'index.html'),'utf8').replace('APP_JS','app.js').replace('STYLE_CSS','style.css').replace('HELP_CSS','help.css');
+const ui = fs.readFileSync(path.join(ROOT, 'web', 'index.html'),'utf8').replace('APP_JS',`app.js?v=${APP_VERSION}`).replace('STYLE_CSS',`style.css?v=${APP_VERSION}`).replace('HELP_CSS',`help.css?v=${APP_VERSION}`).replaceAll('APP_VERSION',APP_VERSION);
 const appjs = fs.readFileSync(path.join(ROOT,'web','app.js'));
 const stylesheet = fs.readFileSync(path.join(ROOT,'web','style.css'));
 const helpStylesheet = fs.readFileSync(path.join(ROOT,'web','help.css'));
+const agentInstaller = fs.readFileSync(path.join(ROOT,'scripts','agent-install.sh'));
 
 function headers(extra = {}) { return { 'cache-control':'no-store', 'content-security-policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'permissions-policy':'camera=(), microphone=(), geolocation=()', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff', 'x-frame-options':'DENY', ...extra }; }
 function json(res, status, body, extra = {}) { res.writeHead(status, headers({ 'content-type':'application/json; charset=utf-8', ...extra })); res.end(JSON.stringify(body)); }
@@ -68,7 +72,7 @@ function publicRoute(r) { return { id:r.id, alias:r.alias, name:r.name, enabled:
 function checkedAlias(value){const alias=cleanAlias(value);if(['r','api','gateway','app','index','index.html','favicon.ico'].includes(alias))throw new Error('alias is reserved');return alias;}
 
 async function api(req, res, rel, cookiePath = cfg.adminPath) {
-  if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath });
+  if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath, version:APP_VERSION });
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
     const b = await body(req); if (!cfg.setupToken || !timingEqual(b.setupToken || '', cfg.setupToken)) { store.audit('setup.denied', ip(req)); return json(res, 403, { error:'invalid setup token' }); }
@@ -93,6 +97,7 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   requireAuth(req);
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.sortOrder-b.sortOrder||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/agents') return json(res,200,{agents:store.data.agents.map(agent=>publicAgent(agent,store.data,agent.id===LOCAL_AGENT_ID?localAgent.status():null))});
+  if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}
   if (req.method === 'GET' && rel === '/dashboard') return json(res,200,metrics.snapshot(store.data.routes));
   if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cookiePath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://')});
   if (req.method === 'GET' && rel === '/notifications') return json(res,200,notifier.view());
@@ -137,7 +142,7 @@ function relayFailed(res,err){console.error('[aegis] relay error',err&&err.stack
 const proxy=http.createServer((req,res)=>{
   res.on('error',()=>{});
   let pathname; try{pathname=new URL(req.url,'http://relay.invalid').pathname}catch{return relayFailed(res,new Error('invalid request target'))}
-  try{const out=isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res);if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
+  try{if(pathname==='/agent-install.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentInstaller)}const out=pathname.startsWith('/api/agent/v1/')?agentApi.handle(req,res):(isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res));if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
   catch(err){relayFailed(res,err)}
 });
 proxy.requestTimeout=0;proxy.headersTimeout=15_000;

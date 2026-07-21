@@ -1,0 +1,13 @@
+services:
+  aegis-relay-agent:
+    image: aegis-relay-agent:local
+    restart: unless-stopped
+    read_only: true
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    user: "10001:10001"
+    volumes:
+      - ./data:/app/agent-data
+    env_file: .env
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]

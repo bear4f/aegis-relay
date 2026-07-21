@@ -22,8 +22,12 @@ Phase 2 数据骨架已落地：
 - 升级时会为所有现有节点自动创建本地 Deployment，本地签名快照的内容、hash 和 signature 保持不变；
 - 快照编译器可以按 Agent 只选择已部署节点；
 - 面板可以修改机器域名和节点选择，远程机器失联后会保留，只有管理员确认后才从面板删除。
+- 面板可以生成只显示一次、10 分钟有效的 enrollment token，控制面只保存 SHA-256 摘要；
+- 远程 Agent 可以通过一键脚本生成 Ed25519/X25519 身份、完成 TOFU 注册并发送带 timestamp + nonce 的签名心跳；
+- 面板响应绑定请求 nonce 并使用固定的 Ed25519 面板身份签名，重复 nonce 会被拒绝；
+- 安装脚本不会把 enrollment token 写入持久配置，并提供 `sudo aegis-relay-agent uninstall`；卸载后控制面记录按设计保持失联。
 
-Phase 2 的远程注册、签名 HTTPS 长轮询、自动显示和远程 Agent 安装/卸载仍未实现，本文对应章节继续作为其约束。
+Phase 2 尚未实现远程配置长轮询、加密信封、ACK/NACK、离线快照应用和实际播放数据面。当前远程 Agent 只会显示“已注册 · 等待配置”，不得视为已可承载 Emby 流量。本文对应章节继续作为其约束。
 
 ## 1. 目的
 
@@ -817,11 +821,12 @@ ACK history
 
 ### Phase 2：远程注册和拉取
 
-- 实现面板 Ed25519/X25519 密钥；
-- 实现 enrollment token；
-- 实现签名请求、响应和 nonce 防重放；
+- [x] 实现面板 Ed25519 签名身份与 Agent Ed25519/X25519 身份；
+- [x] 实现 enrollment token；
+- [x] 实现注册、签名心跳、响应签名和 nonce 防重放；
 - 实现长轮询、ACK/NACK 和离线缓存；
-- 提供 Agent 一键安装脚本。
+- [x] 提供 Agent 注册/心跳一键安装与卸载脚本；
+- 将现有播放代理数据面迁入远程 Agent 运行时。
 
 ### Phase 3：管理界面
 
