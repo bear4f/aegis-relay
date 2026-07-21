@@ -127,7 +127,20 @@ async function serveAdmin(req,res,prefix){try{const u=new URL(req.url,'http://ad
 const admin=http.createServer((req,res)=>serveAdmin(req,res,cfg.adminPath));
 admin.requestTimeout=35_000;admin.headersTimeout=10_000;admin.listen(cfg.adminPort,cfg.adminHost,()=>console.log(`AegisRelay admin listening on http://${cfg.adminHost}:${cfg.adminPort}${cfg.adminPath}`));
 const relay=makeProxyHandler(localAgent.routeSource,key,metrics);
-const proxy=http.createServer((req,res)=>{const pathname=new URL(req.url,'http://relay.invalid').pathname;return isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res)});proxy.requestTimeout=0;proxy.headersTimeout=15_000;proxy.on('upgrade',(req,socket,head)=>handleUpgrade(req,socket,head,localAgent.routeSource,key));proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));
+// A single bad request must never take the relay down mid-playback; nginx keeps serving, so do we.
+function relayFailed(res,err){console.error('[aegis] relay error',err&&err.stack||err);if(res.headersSent||res.destroyed||res.writableEnded)return;try{res.writeHead(502,{'cache-control':'no-store'});res.end('bad gateway')}catch{}}
+const proxy=http.createServer((req,res)=>{
+  res.on('error',()=>{});
+  let pathname; try{pathname=new URL(req.url,'http://relay.invalid').pathname}catch{return relayFailed(res,new Error('invalid request target'))}
+  try{const out=isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res);if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
+  catch(err){relayFailed(res,err)}
+});
+proxy.requestTimeout=0;proxy.headersTimeout=15_000;
+proxy.on('clientError',(err,socket)=>{if(!socket.destroyed)socket.destroy()});
+proxy.on('upgrade',(req,socket,head)=>{socket.on('error',()=>socket.destroy());try{handleUpgrade(req,socket,head,localAgent.routeSource,key)}catch(err){console.error('[aegis] upgrade error',err&&err.stack||err);socket.destroy()}});
+proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));
+process.on('uncaughtException',err=>console.error('[aegis] uncaught exception',err&&err.stack||err));
+process.on('unhandledRejection',err=>console.error('[aegis] unhandled rejection',err&&err.stack||err));
 const flushTimer=setInterval(()=>store.save(),60_000);flushTimer.unref();
 const reminderTimer=setInterval(()=>notifier.tick(store.data.routes),60*60_000);reminderTimer.unref();
 for(const sig of ['SIGINT','SIGTERM'])process.on(sig,()=>{clearInterval(flushTimer);clearInterval(reminderTimer);store.save();admin.close();proxy.close(()=>process.exit(0));setTimeout(()=>process.exit(1),10_000).unref();});

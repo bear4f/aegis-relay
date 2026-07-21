@@ -4,13 +4,15 @@ const monthKey = () => new Date().toISOString().slice(0, 7);
 const dayKey = () => new Date().toISOString().slice(0, 10);
 
 export class ThrottleTransform extends Transform {
-  constructor(bytesPerSecond = 0) { super(); this.rate=bytesPerSecond; this.next=Date.now(); this.bytes=0; }
+  constructor(bytesPerSecond = 0) { super(); this.rate=bytesPerSecond; this.next=Date.now(); this.bytes=0; this.timer=null; }
   _transform(chunk, encoding, callback) {
     this.bytes+=chunk.length;
     if(!this.rate){this.push(chunk);return callback();}
     const now=Date.now(), wait=Math.max(0,this.next-now); this.next=Math.max(now,this.next)+(chunk.length/this.rate)*1000;
-    setTimeout(()=>{this.push(chunk);callback()},wait);
+    // Pushing after the stream was torn down (client aborted a rate-limited stream) throws.
+    this.timer=setTimeout(()=>{this.timer=null;if(this.destroyed)return callback();this.push(chunk);callback()},wait);
   }
+  _destroy(error, callback) { if(this.timer){clearTimeout(this.timer);this.timer=null;} callback(error); }
 }
 
 export class Metrics {

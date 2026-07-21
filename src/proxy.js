@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
+import { pipeline } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
 import { isRouteAuthKey, verifyRouteToken } from './route-auth.js';
@@ -90,8 +91,15 @@ function stateFor(route, target) {
 }
 function markSuccess(route, target) { const s=stateFor(route,target); s.failures=0; s.openUntil=0; s.lastError=''; s.lastSuccess=new Date().toISOString(); }
 function markFailure(route, target, reason) {
+  // Only trip after several consecutive genuine upstream failures. A short fuse used to open the
+  // circuit on transient blips and then serve 502s to healthy nodes, which read as instability.
   const s=stateFor(route,target); s.failures++; s.lastError=String(reason || 'request failed').slice(0,120);
-  if (s.failures >= 2) s.openUntil=Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(s.failures - 2, 4));
+  if (s.failures >= 4) s.openUntil=Date.now() + Math.min(120_000, 10_000 * 2 ** Math.min(s.failures - 4, 4));
+}
+// Writing to a response the client already dropped throws and would take the process down.
+function failResponse(res, status, body) {
+  if (res.headersSent || res.destroyed || res.writableEnded) return;
+  try { res.writeHead(status,{'cache-control':'no-store','content-type':'text/plain; charset=utf-8'}); res.end(body); } catch {}
 }
 function safeUpstreamError(error) {
   const code=String(error?.code||''),message=String(error?.message||'').toLowerCase();
@@ -217,11 +225,18 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     if(publicContext.host)originalHeaders['x-forwarded-host']=publicContext.host;
     originalHeaders['x-forwarded-proto']=publicContext.proto;
     applyClientProfile(originalHeaders,route.clientProfile);
-    const canRetry=safeMethod(req.method); let finished=false;
+    const canRetry=safeMethod(req.method); let finished=false, clientGone=false, activeUp=null;
+    // Emby clients abort constantly (seeking, stopping, backgrounding). Nginx tears the upstream
+    // down with the client; without this the upstream kept streaming into a dead socket and leaked
+    // sockets and memory until the process fell over.
+    const releaseClient=()=>{ if(clientGone||res.writableFinished)return; clientGone=true; if(activeUp&&!activeUp.destroyed)activeUp.destroy(); };
+    res.on('close',releaseClient);
+    res.on('error',()=>{});
+    req.on('error',()=>{});
 
     const routeOrigins=new Set([...normalizedUpstreams(route),...normalizedUpstreams(route,true)].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
     const attempt=(targetValue,index)=>{
-      if (finished) return;
+      if (finished || clientGone) return;
       const target=continuation&&index===0?continuation.target:joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
@@ -247,18 +262,29 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
           }
           catch { delete out.location; }
         }
-        finished=true; const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};res.once('finish',finishMetric);res.once('close',finishMetric);res.writeHead(status,out);upRes.pipe(counter).pipe(res);
+        finished=true;
+        if (res.destroyed || res.headersSent) { up.destroy(); metricDone?.(status,0,false); return; }
+        const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);
+        let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};
+        res.writeHead(status,out);
+        // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
+        // half-open response, so a broken client or upstream cannot strand sockets.
+        pipeline(upRes,counter,res,()=>{ if(!up.destroyed)up.destroy(); finishMetric(); });
       });
+      activeUp=up;
       const connectTimer=setTimeout(()=>up.destroy(new Error('connect timeout')),20_000);
       up.on('socket',s=>{if(s.connecting)s.once('connect',()=>clearTimeout(connectTimer));else clearTimeout(connectTimer)});
       up.setTimeout(3600_000,()=>up.destroy(new Error('upstream idle timeout')));
       up.on('error',err=>{
         clearTimeout(connectTimer);
+        // A client that walked away is not an upstream fault; counting it opened circuits on
+        // perfectly healthy nodes and produced sporadic 502s mid-session.
+        if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
-        if (!finished) { finished=true;metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store','content-type':'text/plain; charset=utf-8'}); res.end(`Bad Gateway\n${reason}`); }
+        if (!finished) { finished=true;metricDone?.(502,0,true);failResponse(res,502,`Bad Gateway\n${reason}`); }
       });
-      if (canRetry) up.end(); else req.pipe(up);
+      if (canRetry) up.end(); else pipeline(req,up,()=>{});
     };
     attempt(configured[0],0);
   };
@@ -272,7 +298,19 @@ export function handleUpgrade(req, socket, head, routeSource, key) {
   if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;
-  const up=transport.request({hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});
-  up.on('upgrade',(r,s,h)=>{markSuccess(found.route,targets[0]);socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(r.headers).map(([k,v])=>`${k}: ${v}`).join('\r\n')}\r\n\r\n`);if(h.length)socket.write(h);if(head.length)s.write(head);s.pipe(socket).pipe(s)});
-  up.on('error',err=>{markFailure(found.route,targets[0],err.message);socket.destroy()});up.end();
+  const up=transport.request({protocol:target.protocol,hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,servername:target.hostname,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});
+  // Unhandled socket errors on either leg would surface as an uncaught exception and restart the
+  // whole relay, and a client that vanished used to leave the upstream socket open forever.
+  let clientGone=false;
+  socket.on('error',()=>socket.destroy());
+  socket.on('close',()=>{clientGone=true;if(!up.destroyed)up.destroy()});
+  up.on('upgrade',(r,s,h)=>{
+    markSuccess(found.route,targets[0]);
+    s.on('error',()=>s.destroy());
+    if(clientGone||socket.destroyed)return s.destroy();
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(r.headers).map(([k,v])=>`${k}: ${v}`).join('\r\n')}\r\n\r\n`);
+    if(h.length)socket.write(h);if(head.length)s.write(head);
+    s.pipe(socket);socket.pipe(s);
+  });
+  up.on('error',err=>{if(!clientGone)markFailure(found.route,targets[0],err.message);socket.destroy()});up.end();
 }
