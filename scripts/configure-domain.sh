@@ -80,6 +80,7 @@ set_env SECURE_COOKIES true
 set_env ADMIN_PUBLISH_IP 127.0.0.1
 set_env PROXY_PUBLISH_IP 127.0.0.1
 set_env PUBLIC_BASE_URL "https://$DOMAIN"
+set_env CERTIFICATE_EMAIL "$EMAIL"
 cd "$INSTALL_DIR"
 if docker compose version >/dev/null 2>&1; then docker compose up -d --force-recreate; else docker-compose up -d --force-recreate; fi
 nginx -t && systemctl reload nginx

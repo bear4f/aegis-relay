@@ -14,7 +14,7 @@ import { customConnectionKey } from './connection-key.js';
 import { isRouteAuthKey, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from './route-auth.js';
 import { LocalAgent } from './local-agent.js';
 import { ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgent, removeRouteDeployments, replaceAgentDeployments } from './agent-registry.js';
-import { AgentApi, enrollmentInstallCommand, issueEnrollment } from './agent-api.js';
+import { AgentApi, enrollmentInstallCommand, issueEnrollment, normalizeCertificateEmail } from './agent-api.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const APP_VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'),'utf8')).version;
@@ -23,9 +23,10 @@ const cfg = {
   proxyHost: process.env.PROXY_HOST || '0.0.0.0', proxyPort: +(process.env.PROXY_PORT || 8080),
   adminPath: normalizeAdminPath(process.env.ADMIN_PATH ?? '_aegis'),
   dataFile: process.env.DATA_FILE || path.join(ROOT, 'data', 'aegis.enc.json'),
-  setupToken: process.env.SETUP_TOKEN || '', secureCookies: process.env.SECURE_COOKIES !== 'false', publicBaseUrl:process.env.PUBLIC_BASE_URL||''
+  setupToken: process.env.SETUP_TOKEN || '', secureCookies: process.env.SECURE_COOKIES !== 'false', publicBaseUrl:process.env.PUBLIC_BASE_URL||'', certificateEmail:process.env.CERTIFICATE_EMAIL||''
 };
 const key = deriveKey(process.env.APP_MASTER_KEY); const store = new Store(cfg.dataFile, key);
+if(!store.data.settings.certificateEmail&&cfg.certificateEmail){store.data.settings.certificateEmail=normalizeCertificateEmail(cfg.certificateEmail);store.save();}
 const localAgent = new LocalAgent({store}); localAgent.start();
 const agentApi = new AgentApi({store,version:APP_VERSION});
 const metrics = new Metrics(store);
@@ -98,9 +99,10 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   requireAuth(req);
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.sortOrder-b.sortOrder||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/agents') return json(res,200,{agents:store.data.agents.map(agent=>publicAgent(agent,store.data,agent.id===LOCAL_AGENT_ID?localAgent.status():null))});
-  if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain,email:b.email});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}
+  if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain,email:store.data.settings.certificateEmail});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}
   if (req.method === 'GET' && rel === '/dashboard') return json(res,200,metrics.snapshot(store.data.routes));
-  if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cookiePath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://')});
+  if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cookiePath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://'),certificateEmail:store.data.settings.certificateEmail||''});
+  if (req.method === 'PUT' && rel === '/deployment') {const b=await body(req);store.data.settings.certificateEmail=normalizeCertificateEmail(b.certificateEmail);store.audit('deployment.certificate_email_updated',ip(req));return json(res,200,{ok:true,certificateEmail:store.data.settings.certificateEmail});}
   if (req.method === 'GET' && rel === '/notifications') return json(res,200,notifier.view());
   if (req.method === 'PUT' && rel === '/notifications') {const b=await body(req),result=notifier.configure(b);store.audit('notifications.updated',ip(req));return json(res,200,result);}
   if (req.method === 'POST' && rel === '/notifications/test') {await notifier.test();store.audit('notifications.tested',ip(req));return json(res,200,{ok:true});}

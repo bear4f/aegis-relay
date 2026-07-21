@@ -23,12 +23,14 @@ test('enrollment tokens are short-lived digests, single use, and create selected
   assert.throws(()=>consumeEnrollment(data,issued.token,{signPublicKey:'x',boxPublicKey:'x'},now+2),/无效、已使用或已过期/);
 });
 
-test('install command uses the HTTPS panel origin and safely quotes names',()=>{
-  const command=enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'secret-token',name:"HK relay's 01",domain:'hk.example.com'});
+test('install command uses the HTTPS panel origin, global certificate email and safely quotes names',()=>{
+  const command=enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'secret-token',name:"HK relay's 01",domain:'hk.example.com',email:'ops@example.com'});
   assert.match(command,/https:\/\/panel\.example\.com\/agent-install\.sh/);
   assert.match(command,/--token 'secret-token'/);
   assert.match(command,/HK relay'"'"'s 01/);
+  assert.match(command,/--email 'ops@example\.com'/);
   assert.throws(()=>enrollmentInstallCommand({publicBaseUrl:'http://panel.example.com',token:'x',name:'HK'}),/HTTPS/);
+  assert.throws(()=>enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'x',name:'HK',domain:'hk.example.com'}),/统一证书邮箱/);
 });
 
 test('agent and panel signature inputs are fixed LF-delimited protocol strings',()=>{

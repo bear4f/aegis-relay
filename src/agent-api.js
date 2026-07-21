@@ -16,7 +16,7 @@ const safeName=value=>{
   if(!name||name.length>80||/[\r\n\0]/.test(name))throw new Error('机器名称应为 1–80 个字符');
   return name;
 };
-const safeEmail=value=>{const email=String(value||'').trim();if(email&&!/^[^\s@]+@[^\s@]+$/.test(email))throw new Error('证书邮箱格式无效');return email;};
+export const normalizeCertificateEmail=value=>{const email=String(value||'').trim();if(!email||email.length>254||/[\r\n\0]/.test(email)||!/^[^\s@]+@[^\s@]+$/.test(email))throw new Error('请先配置有效的统一证书邮箱');return email;};
 const shellQuote=value=>`'${String(value).replaceAll("'",`'"'"'`)}'`;
 
 function publicHttpsOrigin(value) {
@@ -81,9 +81,10 @@ function validatePublicKey(value,expectedType) {
   } catch { throw Object.assign(new Error(`无效的 ${expectedType} 公钥`),{status:400}); }
 }
 
-export function enrollmentInstallCommand({publicBaseUrl,token,name,domain,email=''}) {
+export function enrollmentInstallCommand({publicBaseUrl,token,name,domain,email}) {
   const origin=publicHttpsOrigin(publicBaseUrl);
-  return `curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))}${domain?` --domain ${shellQuote(normalizeAgentDomain(domain))}`:''}${email?` --email ${shellQuote(safeEmail(email))}`:''}`;
+  const agentDomain=normalizeAgentDomain(domain);if(!agentDomain)throw new Error('代理域名不能为空');
+  return `curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))} --domain ${shellQuote(agentDomain)} --email ${shellQuote(normalizeCertificateEmail(email))}`;
 }
 
 function canonicalQuery(url) {
