@@ -28,8 +28,20 @@ export class Metrics {
   canServe(route) { const quota=Number(route.monthlyQuotaGB||0)*1024**3; return !quota || this.route(route).monthBytes<quota; }
   begin(route,{playback=false,bytesIn=0}={}) {
     const s=this.route(route), id=route.id||route.alias; s.requests++; if(playback)s.playbackRequests++; s.bytesIn+=Number(bytesIn)||0; s.lastRequest=new Date().toISOString(); this.active.set(id,(this.active.get(id)||0)+1);
-    const addBytes=bytes=>{const amount=Math.max(0,Number(bytes)||0);s.bytesOut+=amount;s.monthBytes+=amount;const d=this.store.data.metrics.daily;d[dayKey()] ||= 0;d[dayKey()]+=amount;for(const old of Object.keys(d).sort().slice(0,-31))delete d[old]};
-    let done=false;const finish=(status=500,bytesOut=0,error=false)=>{if(done)return;done=true;addBytes(bytesOut);s.lastStatus=status;if(error||status>=500)s.errors++;this.active.set(id,Math.max(0,(this.active.get(id)||1)-1));this.emit()};finish.addBytes=addBytes;return finish;
+    // addBytes runs once per streamed chunk, so it has to stay trivial. Formatting a date and
+    // sorting the daily map on every chunk burned real CPU on the media path; accumulate instead
+    // and fold into the store at most once a second (and always on completion).
+    let pending=0,lastFold=0;
+    const fold=()=>{
+      if(!pending)return;
+      const amount=pending;pending=0;
+      s.bytesOut+=amount;s.monthBytes+=amount;
+      const d=this.store.data.metrics.daily,key=dayKey();
+      if(d[key]===undefined){d[key]=0;for(const old of Object.keys(d).sort().slice(0,-31))delete d[old];}
+      d[key]+=amount;
+    };
+    const addBytes=bytes=>{const amount=Math.max(0,Number(bytes)||0);if(!amount)return;pending+=amount;const now=Date.now();if(now-lastFold>=1000){lastFold=now;fold();}};
+    let done=false;const finish=(status=500,bytesOut=0,error=false)=>{if(done)return;done=true;pending+=Math.max(0,Number(bytesOut)||0);fold();s.lastStatus=status;if(error||status>=500)s.errors++;this.active.set(id,Math.max(0,(this.active.get(id)||1)-1));this.emit()};finish.addBytes=addBytes;return finish;
   }
   snapshot(routes) {
     const items=routes.map(r=>{const s=this.route(r);return{id:r.id,alias:r.alias,name:r.name,enabled:r.enabled,active:this.active.get(r.id||r.alias)||0,...s,quotaBytes:Number(r.monthlyQuotaGB||0)*1024**3,speedLimitMbps:Number(r.speedLimitMbps||0)}});
