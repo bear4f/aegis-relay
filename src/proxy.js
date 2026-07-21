@@ -1,7 +1,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import dnsPromises from 'node:dns/promises';
-import { isPrivateIP, timingEqual, tokenDigest } from './security.js';
+import { isPrivateIP } from './security.js';
+import { verifyRouteToken } from './route-auth.js';
 import { ThrottleTransform } from './metrics.js';
 import { guardedLookup } from './lookup.js';
 
@@ -74,7 +75,7 @@ function routeFor(req, routes, key) {
   const route = routes.find(r => r.enabled && r.alias === parts[offset]);
   if (!route) return null;
   if (route.accessMode === 'alias_only') return { route, rest:`/${parts.slice(offset + 1).join('/')}`, suppliedKey:'', prefix:accessPrefix(route) };
-  if (parts.length <= offset + 1 || !route.keyDigest || !timingEqual(tokenDigest(parts[offset + 1], key), route.keyDigest)) return null;
+  if (parts.length <= offset + 1 || !verifyRouteToken(route, parts[offset + 1], key)) return null;
   const suppliedKey = parts[offset + 1];
   return { route, rest:`/${parts.slice(offset + 2).join('/')}`, suppliedKey, prefix:accessPrefix(route, suppliedKey) };
 }
