@@ -600,3 +600,13 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 /* a revealed client address must be fully readable on desktop and mobile */
 .cell-addr.shown{max-width:none}
 .cell-addr.shown code{white-space:normal;word-break:break-all;overflow:visible;text-overflow:clip;line-height:1.45}
+
+/* chart fills its panel so the row height is never wasted as blank space */
+.chart-panel{display:flex;flex-direction:column}
+.chart-panel .panel-head{flex:none}
+.bar-chart.traffic-bars{flex:1;height:auto;min-height:190px}
+/* value sits just above each bar, so it is readable without hovering (mobile has no hover) */
+.traffic-value{position:absolute;left:-4px;right:-4px;text-align:center;width:auto;
+  font-size:10px;font-weight:700;color:var(--text-2);font-variant-numeric:tabular-nums;
+  white-space:nowrap;pointer-events:none}
+@media(max-width:900px){.traffic-value{font-size:9px;left:-8px;right:-8px}}
