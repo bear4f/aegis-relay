@@ -7,7 +7,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/security.js && node --check src/route-auth.js && node --check src/store.js && node --check src/proxy.js && node --check src/metrics.js && node --check src/diagnostics.js && node --check src/notifier.js && node --check src/credentials.js && node --check src/lookup.js && node --check src/admin-path.js && node --check src/connection-key.js && node --check web/app.js",
+    "check": "node --check src/server.js && node --check src/security.js && node --check src/route-auth.js && node --check src/canonical-json.js && node --check src/snapshot.js && node --check src/store.js && node --check src/proxy.js && node --check src/metrics.js && node --check src/diagnostics.js && node --check src/notifier.js && node --check src/credentials.js && node --check src/lookup.js && node --check src/admin-path.js && node --check src/connection-key.js && node --check web/app.js",
     "test": "node --test"
   },
   "license": "MIT"
