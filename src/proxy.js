@@ -14,7 +14,7 @@ const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 const runtime = new Map();
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
-const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:128, maxFreeSockets:16, timeout:65_000 };
+const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:256, maxFreeSockets:64, timeout:75_000, scheduling:'lifo' };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
 
@@ -273,18 +273,28 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         }
         finished=true;
         if (res.destroyed || res.headersSent) { up.destroy(); metricDone?.(status,0,false); return; }
-        const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0,bytes=>metricDone?.addBytes?.(bytes));
-        let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,metricDone?.addBytes?0:counter.bytes,status>=500)};
+        const speed=Number(route.speedLimitMbps||0);
+        let measured=false,streamed=0;
+        const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,metricDone?.addBytes?0:streamed,status>=500)};
         res.writeHead(status,out);
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
-        // half-open response, so a broken client or upstream cannot strand sockets.
-        // Only tear the socket down on failure; a cleanly finished response returns to the pool so
-        // the next Range request (i.e. the next seek) skips the TCP+TLS handshake entirely.
-        pipeline(upRes,counter,res,err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); });
+        // half-open response. Only tear the socket down on failure; a cleanly finished response
+        // returns to the pool so the next Range request (a seek) skips the TCP+TLS handshake.
+        const done=err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); };
+        if(speed>0){
+          const counter=new ThrottleTransform(speed*1024*1024/8,bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)});
+          pipeline(upRes,counter,res,done);
+        }else{
+          // No rate limit means no transform. A Transform defaults to a 16 KiB high water mark, so
+          // parking one in front of every response throttled full-speed playback to that buffer and
+          // added a pause/resume cycle per chunk. Count bytes with a listener instead.
+          upRes.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
+          pipeline(upRes,res,done);
+        }
       });
       activeUp=up;
       const connectTimer=setTimeout(()=>up.destroy(new Error('connect timeout')),20_000);
-      up.on('socket',s=>{if(s.connecting)s.once('connect',()=>clearTimeout(connectTimer));else clearTimeout(connectTimer)});
+      up.on('socket',s=>{s.setNoDelay(true);if(s.connecting)s.once('connect',()=>clearTimeout(connectTimer));else clearTimeout(connectTimer)});
       up.setTimeout(3600_000,()=>up.destroy(new Error('upstream idle timeout')));
       up.on('error',err=>{
         clearTimeout(connectTimer);
@@ -293,7 +303,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
         // A pooled connection the origin had already closed dies on reuse. Retry the same upstream
         // once on a brand-new socket before treating it as a real failure.
-        const staleSocket=!freshSocket&&!finished&&canRetry&&(err?.code==='ECONNRESET'||/socket hang up/i.test(String(err?.message||'')));
+        const staleSocket=!freshSocket&&!finished&&canRetry&&!res.headersSent;
         if (staleSocket) return attempt(targetValue,index,true);
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);

@@ -168,6 +168,7 @@ const proxy=http.createServer((req,res)=>{
   catch(err){relayFailed(res,err)}
 });
 proxy.requestTimeout=0;proxy.headersTimeout=15_000;
+proxy.on('connection',socket=>socket.setNoDelay(true));
 proxy.on('clientError',(err,socket)=>{if(!socket.destroyed)socket.destroy()});
 proxy.on('upgrade',(req,socket,head)=>{socket.on('error',()=>socket.destroy());try{if(splitDomains&&requestHostname(req)!==proxyHostname)return socket.destroy();handleUpgrade(req,socket,head,localAgent.routeSource,key)}catch(err){console.error('[aegis] upgrade error',err&&err.stack||err);socket.destroy()}});
 proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));
