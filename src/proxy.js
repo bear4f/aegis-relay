@@ -178,11 +178,11 @@ function continuationTarget(found, appKey) {
 
 function publicRelayLocation(found, target, context, appKey, playback) {
   const token=sealRedirectTarget(found.route,target,appKey,playback),path=`${found.prefix}/${RELAY_REDIRECT_SEGMENT}/${token}`;
-  return context.host?`${context.proto}://${context.host}${path}${target.hash}`:`${path}${target.hash}`;
+  return context.host?`${context.proto}://${context.host}${path}`:path;
 }
 
 function publicRequestContext(req) {
-  const host=String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim();
+  const host=String(req.headers.host||'').trim();
   const forwarded=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim().toLowerCase();
   const proto=forwarded==='https'||forwarded==='http'?forwarded:(req.socket.encrypted?'https':'http');
   return {host,proto};
