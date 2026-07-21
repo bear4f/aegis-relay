@@ -114,9 +114,30 @@ function importPanelPrivate(identity) { return crypto.createPrivateKey({key:Buff
 function baseHeaders(extra={}) { return {'cache-control':'no-store','content-type':'application/json; charset=utf-8','x-content-type-options':'nosniff','referrer-policy':'no-referrer',...extra}; }
 
 export class AgentApi {
-  constructor({store,version='0.0.0'}) { this.store=store;this.version=version;this.panelIdentity=ensurePanelSigningIdentity(store);this.nonces=new Map(); }
+  constructor({store,version='0.0.0'}) {
+    this.store=store;this.version=version;this.panelIdentity=ensurePanelSigningIdentity(store);this.nonces=new Map();
+    // Control-plane work must never stall the media data plane, so desired snapshots are compiled
+    // once per configuration epoch instead of on every heartbeat, and pollers park on a long poll.
+    this.epoch=1;this.cache=new Map();this.waiters=new Set();
+  }
+
+  // Called by the panel whenever routes, deployments or agents change.
+  invalidate() { this.epoch++;this.cache.clear();this.wake(); }
+  wake() { for(const waiter of [...this.waiters])waiter.release('changed'); }
+
+  waitForConfig(seconds) {
+    const waiter={done:false};
+    waiter.promise=new Promise(resolve=>{
+      waiter.release=reason=>{if(waiter.done)return;waiter.done=true;this.waiters.delete(waiter);clearTimeout(waiter.timer);resolve(reason)};
+      waiter.timer=setTimeout(()=>waiter.release('timeout'),Math.max(1,seconds)*1000);
+      waiter.timer.unref?.();
+      this.waiters.add(waiter);
+    });
+    return waiter;
+  }
 
   send(res,status,payload,requestNonce='enroll') {
+    if(res.writableEnded||res.destroyed)return;
     const raw=status===204?Buffer.alloc(0):Buffer.from(JSON.stringify(payload)),timestamp=nowSeconds(),contentHash=sha256(raw);
     const signature=b64u(crypto.sign(null,Buffer.from(panelResponseInput({status,requestNonce,timestamp,contentHash})),importPanelPrivate(this.panelIdentity)));
     const responseHeaders=baseHeaders({'x-aegis-panel-key-id':this.panelIdentity.keyId,'x-aegis-timestamp':String(timestamp),'x-aegis-content-sha256':contentHash,'x-aegis-signature':signature});if(status===204)delete responseHeaders['content-type'];
@@ -140,8 +161,13 @@ export class AgentApi {
   }
 
   desired(agent) {
+    // Recompiling means canonical JSON + SHA-256 + an Ed25519 signature. Doing that on every poll
+    // burned CPU shared with proxied playback, so reuse it until the configuration actually changes.
+    const cached=this.cache.get(agent.id);
+    if(cached&&cached.epoch===this.epoch){agent.desiredRevision=cached.snapshot.revision;agent.desiredHash=cached.snapshot.hash;return cached.snapshot;}
     const compiled=compileAgentDesiredSnapshot({data:this.store.data,agentId:agent.id,previousState:agent.desiredState||null,signingIdentity:this.panelIdentity});
     agent.desiredState=compiled.state;agent.desiredRevision=compiled.snapshot.revision;agent.desiredHash=compiled.snapshot.hash;
+    this.cache.set(agent.id,{epoch:this.epoch,snapshot:compiled.snapshot});
     return compiled.snapshot;
   }
 
@@ -159,13 +185,29 @@ export class AgentApi {
         const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
         const agent=verified.agent,at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.agentVersion=String(parsed.agentVersion||agent.agentVersion||'unknown').slice(0,32);agent.applyState=['active','waiting','error'].includes(parsed.applyState)?parsed.applyState:'waiting';agent.proxyHealthy=parsed.proxyHealthy===true;agent.appliedRevision=Number.isSafeInteger(parsed.currentRevision)?Math.max(0,parsed.currentRevision):Number(agent.appliedRevision||0);agent.capabilities=cleanCapabilities(parsed.capabilities);agent.reportedDomain=normalizeAgentDomain(parsed.domain||'');
         if(parsed.telemetry!==undefined){const telemetry=sanitizeTelemetry(parsed.telemetry);if(!telemetry)throw Object.assign(new Error('invalid agent telemetry'),{status:400,nonce:requestNonce});agent.telemetry=telemetry;agent.lastTelemetryAt=at;}
-        const snapshot=this.desired(agent);delete agent.error;this.store.save();return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:15,agentVersion:this.version},requestNonce);
+        // Heartbeat state is disposable; the panel's periodic flush persists it. Writing the whole
+        // encrypted store synchronously on every check-in stalled the event loop serving playback.
+        const snapshot=this.desired(agent);delete agent.error;return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:30,agentVersion:this.version},requestNonce);
       }
       if(req.method==='GET'&&url.pathname==='/api/agent/v1/config'){
         const {raw}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
         const after=Math.max(0,Number(url.searchParams.get('after')||0));if(!Number.isSafeInteger(after))throw Object.assign(new Error('invalid config revision'),{status:400,nonce:requestNonce});
-        const snapshot=this.desired(verified.agent),at=new Date().toISOString();verified.agent.lastSeen=at;verified.agent.updatedAt=at;this.store.save();
-        if(after>=snapshot.revision)return this.send(res,204,null,requestNonce);
+        const at=new Date().toISOString();verified.agent.lastSeen=at;verified.agent.updatedAt=at;
+        let snapshot=this.desired(verified.agent);
+        if(after>=snapshot.revision){
+          // Long poll: park until the configuration changes instead of making the agent hammer us.
+          const wait=Math.min(25,Math.max(0,Number(url.searchParams.get('wait')||0)));
+          if(wait>0){
+            let gone=false;const waiter=this.waitForConfig(wait);
+            const abandon=()=>{gone=true;waiter.release('closed')};
+            res.once('close',abandon);
+            await waiter.promise;
+            res.off('close',abandon);
+            if(gone||res.writableEnded||res.destroyed)return;
+            snapshot=this.desired(verified.agent);
+          }
+          if(after>=snapshot.revision)return this.send(res,204,null,requestNonce);
+        }
         return this.send(res,200,sealAgentSnapshot({agent:verified.agent,snapshot,panelIdentity:this.panelIdentity}),requestNonce);
       }
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/ack'){
