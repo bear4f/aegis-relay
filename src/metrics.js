@@ -4,9 +4,9 @@ const monthKey = () => new Date().toISOString().slice(0, 7);
 const dayKey = () => new Date().toISOString().slice(0, 10);
 
 export class ThrottleTransform extends Transform {
-  constructor(bytesPerSecond = 0) { super(); this.rate=bytesPerSecond; this.next=Date.now(); this.bytes=0; this.timer=null; }
+  constructor(bytesPerSecond = 0,onBytes=null) { super(); this.rate=bytesPerSecond; this.onBytes=typeof onBytes==='function'?onBytes:null;this.next=Date.now(); this.bytes=0; this.timer=null; }
   _transform(chunk, encoding, callback) {
-    this.bytes+=chunk.length;
+    this.bytes+=chunk.length;this.onBytes?.(chunk.length);
     if(!this.rate){this.push(chunk);return callback();}
     const now=Date.now(), wait=Math.max(0,this.next-now); this.next=Math.max(now,this.next)+(chunk.length/this.rate)*1000;
     // Pushing after the stream was torn down (client aborted a rate-limited stream) throws.
@@ -28,7 +28,8 @@ export class Metrics {
   canServe(route) { const quota=Number(route.monthlyQuotaGB||0)*1024**3; return !quota || this.route(route).monthBytes<quota; }
   begin(route,{playback=false,bytesIn=0}={}) {
     const s=this.route(route), id=route.id||route.alias; s.requests++; if(playback)s.playbackRequests++; s.bytesIn+=Number(bytesIn)||0; s.lastRequest=new Date().toISOString(); this.active.set(id,(this.active.get(id)||0)+1);
-    let done=false; return (status=500,bytesOut=0,error=false)=>{if(done)return;done=true;s.lastStatus=status;s.bytesOut+=bytesOut;s.monthBytes+=bytesOut;if(error||status>=500)s.errors++;this.active.set(id,Math.max(0,(this.active.get(id)||1)-1));const d=this.store.data.metrics.daily;d[dayKey()] ||= 0;d[dayKey()]+=bytesOut;for(const old of Object.keys(d).sort().slice(0,-31))delete d[old];this.emit();};
+    const addBytes=bytes=>{const amount=Math.max(0,Number(bytes)||0);s.bytesOut+=amount;s.monthBytes+=amount;const d=this.store.data.metrics.daily;d[dayKey()] ||= 0;d[dayKey()]+=amount;for(const old of Object.keys(d).sort().slice(0,-31))delete d[old]};
+    let done=false;const finish=(status=500,bytesOut=0,error=false)=>{if(done)return;done=true;addBytes(bytesOut);s.lastStatus=status;if(error||status>=500)s.errors++;this.active.set(id,Math.max(0,(this.active.get(id)||1)-1));this.emit()};finish.addBytes=addBytes;return finish;
   }
   snapshot(routes) {
     const items=routes.map(r=>{const s=this.route(r);return{id:r.id,alias:r.alias,name:r.name,enabled:r.enabled,active:this.active.get(r.id||r.alias)||0,...s,quotaBytes:Number(r.monthlyQuotaGB||0)*1024**3,speedLimitMbps:Number(r.speedLimitMbps||0)}});

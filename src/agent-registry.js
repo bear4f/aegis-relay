@@ -85,6 +85,6 @@ export function publicAgent(agent, data, runtime=null, now=Date.now()) {
     applyState:runtime?.applyState||agent.applyState||'waiting',proxyHealthy:runtime?.proxyHealthy===true||agent.proxyHealthy===true,
     desiredRevision:Number(runtime?.desiredRevision??agent.desiredRevision??0),appliedRevision:Number(runtime?.appliedRevision??agent.appliedRevision??0),
     inSync:runtime?.inSync===true||(Number(agent.desiredRevision||0)===Number(agent.appliedRevision||0)&&agent.applyState==='active'),
-    lastAck:runtime?.lastAck||agent.lastAck||null,error:runtime?.error||agent.error||'',canDelete:!local
+    lastAck:runtime?.lastAck||agent.lastAck||null,error:runtime?.error||agent.error||'',telemetry:runtime?.telemetry||agent.telemetry||null,lastTelemetryAt:runtime?.lastTelemetryAt||agent.lastTelemetryAt||null,canDelete:!local
   };
 }

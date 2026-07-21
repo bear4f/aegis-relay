@@ -4,6 +4,7 @@ import { ensurePanelSigningIdentity } from './snapshot.js';
 import { compileAgentDesiredSnapshot } from './snapshot.js';
 import { normalizeAgentDomain, replaceAgentDeployments } from './agent-registry.js';
 import { sealAgentSnapshot } from './agent-config.js';
+import { sanitizeTelemetry } from './telemetry.js';
 
 export const AGENT_PROTOCOL_VERSION=1;
 export const ENROLLMENT_TTL_MS=10*60_000;
@@ -157,6 +158,7 @@ export class AgentApi {
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/check-in'){
         const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
         const agent=verified.agent,at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.agentVersion=String(parsed.agentVersion||agent.agentVersion||'unknown').slice(0,32);agent.applyState=['active','waiting','error'].includes(parsed.applyState)?parsed.applyState:'waiting';agent.proxyHealthy=parsed.proxyHealthy===true;agent.appliedRevision=Number.isSafeInteger(parsed.currentRevision)?Math.max(0,parsed.currentRevision):Number(agent.appliedRevision||0);agent.capabilities=cleanCapabilities(parsed.capabilities);agent.reportedDomain=normalizeAgentDomain(parsed.domain||'');
+        if(parsed.telemetry!==undefined){const telemetry=sanitizeTelemetry(parsed.telemetry);if(!telemetry)throw Object.assign(new Error('invalid agent telemetry'),{status:400,nonce:requestNonce});agent.telemetry=telemetry;agent.lastTelemetryAt=at;}
         const snapshot=this.desired(agent);delete agent.error;this.store.save();return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:15,agentVersion:this.version},requestNonce);
       }
       if(req.method==='GET'&&url.pathname==='/api/agent/v1/config'){

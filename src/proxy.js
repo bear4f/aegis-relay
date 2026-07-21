@@ -273,8 +273,8 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         }
         finished=true;
         if (res.destroyed || res.headersSent) { up.destroy(); metricDone?.(status,0,false); return; }
-        const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0);
-        let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,counter.bytes,status>=500)};
+        const speed=Number(route.speedLimitMbps||0),counter=new ThrottleTransform(speed>0?speed*1024*1024/8:0,bytes=>metricDone?.addBytes?.(bytes));
+        let measured=false;const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,metricDone?.addBytes?0:counter.bytes,status>=500)};
         res.writeHead(status,out);
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
         // half-open response, so a broken client or upstream cannot strand sockets.

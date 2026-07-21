@@ -210,6 +210,24 @@ svg{stroke-linecap:round;stroke-linejoin:round}
   background:linear-gradient(to top,var(--blue),var(--accent));opacity:.78;transition:.25s,height .8s var(--ease)}
 .bar:hover{opacity:1;filter:brightness(1.12)}
 .bar span{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--text-3)}
+.bar-chart.traffic-bars{height:248px;display:grid;grid-template-columns:repeat(14,minmax(44px,1fr));align-items:stretch;gap:8px;padding:20px 2px 0;overflow-x:auto;overflow-y:hidden}
+.traffic-day{min-width:44px;display:grid;grid-template-rows:20px 1fr 18px;gap:5px;text-align:center;align-items:end}
+.traffic-value{font-size:9px;color:var(--text-2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.traffic-track{position:relative;height:176px;border-radius:7px;background:linear-gradient(to top,rgba(91,140,255,.035),rgba(61,215,180,.015));border-bottom:1px solid var(--line-2);overflow:hidden}
+.traffic-track i{position:absolute;inset:auto 5px 0;border-radius:6px 6px 2px 2px;background:linear-gradient(to top,var(--blue),var(--accent));box-shadow:0 -8px 24px rgba(61,215,180,.12);transition:height .7s var(--ease)}
+.traffic-day:hover .traffic-track i{filter:brightness(1.14)}
+.traffic-day>small{color:var(--text-3);font-size:9px}
+.traffic-insight-panel{min-height:330px}
+.traffic-insights{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}
+.traffic-insights>div{min-height:96px;padding:16px;border:1px solid var(--line);border-radius:var(--r-sm);background:rgba(255,255,255,.02);display:flex;flex-direction:column;justify-content:center}
+.traffic-insights small,.traffic-insights em{color:var(--text-3);font-style:normal;font-size:10px}.traffic-insights strong{font-size:20px;margin:5px 0;font-variant-numeric:tabular-nums}
+.machine-panel,.dashboard-node-panel{margin-top:14px}
+.machine-overview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px}
+.machine-tile{padding:17px;border:1px solid var(--line);border-radius:var(--r-sm);background:linear-gradient(140deg,rgba(61,215,180,.04),rgba(91,140,255,.018));min-width:0}
+.machine-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.machine-title strong,.machine-title small{display:block}.machine-title>div>small{color:var(--text-3);font-size:10px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+.machine-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--green);box-shadow:0 0 10px var(--green-glow)}.machine-dot.off{background:var(--red);box-shadow:none}
+.machine-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:15px}.machine-stats>div{padding:10px;background:rgba(0,0,0,.14);border-radius:8px;min-width:0}.machine-stats small,.machine-stats strong{display:block}.machine-stats small{color:var(--text-3);font-size:9px}.machine-stats strong{font-size:12px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.machine-share{height:4px;margin:14px 0 8px;border-radius:99px;background:var(--surface-3);overflow:hidden}.machine-share i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--blue),var(--accent))}.machine-report{color:var(--text-3);font-size:9px}.telemetry-missing{margin-top:15px;padding:13px;border:1px dashed var(--line-2);border-radius:8px;color:var(--amber);font-size:11px}
 .mini-list{display:grid;gap:2px}
 .mini-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}
 .mini-row:last-child{border:0}
@@ -421,7 +439,8 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .mobile-bar{display:block}
   .topbar{height:auto;padding:16px 18px;flex-wrap:wrap;gap:10px}
   .page{padding:22px 16px 40px}
-  .metric-grid,.node-grid,.deploy-grid{grid-template-columns:1fr}
+  .metric-grid,.node-grid,.deploy-grid,.machine-overview{grid-template-columns:1fr}
+  .machine-stats{grid-template-columns:1fr 1fr}
   .hero{padding:26px;min-height:auto}.hero-orbit{display:none}
   .top-actions .live{display:none}
   .section-intro{align-items:flex-start;flex-direction:column;gap:12px}
