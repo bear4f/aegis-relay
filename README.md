@@ -9,7 +9,7 @@ https://relay.example.com/r/family/<独立访问密钥>/
 
 上游域名、端口和协议不会出现在客户端地址中。管理员登录后可以随时查看和复制完整客户端地址；连接密码与其他配置一起保存在 AES-256-GCM 加密的数据文件中，代理校验仍使用 HMAC 摘要。
 
-> 当前为安全预览版 `0.7.0`。首次部署建议先在测试域名验证，再承载正式节点。
+> 当前为安全预览版 `0.8.0`。首次部署建议先在测试域名验证，再承载正式节点。
 
 ## 设计来源与原创边界
 
@@ -37,7 +37,7 @@ AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离
 - **多机代理数据面**：玻璃拟态控制台可生成 10 分钟有效的一次性安装指令；远程机器使用 Ed25519/X25519 身份注册、拉取仅属于自己的加密节点快照、原子应用并回传版本，卸载后在面板保持失联，直到管理员删除。
 - **保号提醒**：可配置节点维护周期，通过 Telegram Bot 推送提醒；完成保号后在节点卡片重置周期。
 
-`0.7.0` 新增分布式流量遥测：仪表盘聚合主代理机与所有探针的最近 14 天每日流量，并逐台展示在线、同步、累计、本月、请求、播放和活动连接。播放流量按数据块实时累计，探针每 15 秒签名上报、每 60 秒在本地加密落盘。统一证书邮箱和严格域名绑定继续保持；控制面离线时，Agent 继续使用最后一份已验签配置。
+`0.8.0` 新增控制面/本地数据面双域名：在“代理机器 → 本地 Agent”保存新代理域名后，受限的主机执行器自动生成双域名 Nginx 配置、申请证书、校验并切换；客户端地址自动使用新代理域名。面板域名只保留管理与 Agent 控制接口，旧代理域名和指向同一 IP 的其他域名均不能继续承载 Emby。失败时保留旧配置并在面板显示原因。
 
 兼容性请求头只适用于你拥有或已获明确授权的 Emby 上游。AegisRelay 不内置第三方客户端冒充模板，也不应用于绕过上游禁止反代、客户端限制或其他访问控制。详见 [节点管理说明](docs/NODE_MANAGEMENT.md)。
 
@@ -82,10 +82,11 @@ Setup Token: 一次性随机令牌
 sudo aegis-relay domain panel.example.com admin@example.com
 ```
 
-该命令会依次完成：
+该命令先完成管理面板的 HTTPS 收口，并保留兼容的单域名代理入口。随后请在“代理机器 → 本地 Agent”填写一个不同的代理域名，面板会自动完成第二张证书及双域名切换。切换完成后：
 
 - 安装并配置 Nginx；
-- 同一 HTTPS 域名根路径直接打开 2FA 管理面板，节点短路径继续由代理入口处理；
+- `panel.example.com` 只提供 2FA 管理面板、Agent 注册和配置同步，不处理 Emby 节点路径；
+- 本地 Agent 中填写的代理域名只提供 Emby 网关和播放流量，不提供管理接口；
 - 通过 Certbot 申请 Let's Encrypt 证书并强制 HTTP 跳转 HTTPS；
 - 启用 `certbot.timer` 自动续期；
 - 证书成功后把 Docker 的管理端口从 `0.0.0.0:9080` 收回为 `127.0.0.1:9080`；
@@ -97,13 +98,13 @@ sudo aegis-relay domain panel.example.com admin@example.com
 https://panel.example.com/
 ```
 
-最终客户端节点地址：
+切换后的客户端节点地址（假设本地代理域名是 `emby.example.com`）：
 
 ```text
-https://panel.example.com/charity/<访问密钥>/
+https://emby.example.com/charity/<访问密钥>/
 ```
 
-此时外网不能再直接访问 `IP:9080`。可从云安全组删除 9080 放行规则。Nginx 站点关闭 access log，避免路径密钥进入日志；同时精确校验请求 Host，只有配置的域名可以进入面板和代理，指向同一 IP 的其他子域名返回 HTTP 421。
+此时外网不能再直接访问 `IP:9080`。可从云安全组删除 9080 放行规则。Nginx 站点关闭 access log，避免路径密钥进入日志；同时精确校验请求 Host，只有面板域名可以进入控制面、只有当前本地代理域名可以进入 Emby 数据面。旧代理域名和指向同一 IP 的其他子域名返回 HTTP 421 或 404。
 
 随机管理路径仍保留为兼容入口，但日常无需记忆。可选的公开节点页移动到 `https://panel.example.com/gateway/`。管理员会话保存在同一份 AES-256-GCM 加密数据文件中，因此正常更新不会要求立即重新登录；代理层会剥离管理员会话 Cookie 和 CSRF 头，绝不会把它们发送给 Emby 上游。
 
@@ -113,9 +114,12 @@ https://panel.example.com/charity/<访问密钥>/
 sudo aegis-relay status
 sudo aegis-relay logs
 sudo aegis-relay update
+sudo aegis-relay proxy-domain emby.example.com
 systemctl status certbot.timer
 certbot certificates
 ```
+
+正常情况下直接在面板切换本地代理域名；`proxy-domain` 是 systemd 执行器不可用时的手动恢复命令。升级到 `0.8.0` 后需先运行一次 `sudo aegis-relay update`，安装受限的域名切换执行器。执行器只读取经过严格校验的域名与证书邮箱，只能调用固定的 Nginx/Certbot 脚本，容器本身仍保持非 root、只读文件系统和零 capabilities。
 
 远程代理机使用独立命令：
 

@@ -46,6 +46,34 @@ chown -R 10001:10001 data
 chmod 700 data
 if docker compose version >/dev/null 2>&1; then docker compose up -d --build; else docker-compose up -d --build; fi
 install -m 0755 scripts/aegis-relay /usr/local/bin/aegis-relay
+chmod 0755 scripts/configure-domain.sh scripts/configure-local-domain.sh scripts/host-domain-apply.sh
+
+# The panel container stays unprivileged. A narrowly scoped host service watches only for
+# validated domain-switch requests and can run the fixed Nginx/Certbot workflow as root.
+if command -v systemctl >/dev/null 2>&1; then
+  cat > /etc/systemd/system/aegis-relay-domain.service <<EOF
+[Unit]
+Description=AegisRelay constrained local proxy domain switch
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh $INSTALL_DIR/scripts/host-domain-apply.sh
+EOF
+  cat > /etc/systemd/system/aegis-relay-domain.path <<EOF
+[Unit]
+Description=Watch AegisRelay local proxy domain requests
+
+[Path]
+PathExists=$INSTALL_DIR/data/host-domain-request.json
+Unit=aegis-relay-domain.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now aegis-relay-domain.path
+fi
 
 PUBLIC_IP=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 ADMIN_SLUG=$(sed -n 's/^ADMIN_PATH=//p' .env | head -n1)
@@ -58,5 +86,5 @@ if [ "$FIRST_INSTALL" -eq 1 ]; then
   echo "完成管理员和 2FA 设置后，执行："
   echo "sudo aegis-relay domain 你的域名 你的邮箱"
 else
-  echo "AegisRelay 已更新并重新启动，现有密钥与数据保持不变。"
+  echo "AegisRelay 已更新并重新启动，现有密钥与数据保持不变。代理域名切换执行器已就绪。"
 fi

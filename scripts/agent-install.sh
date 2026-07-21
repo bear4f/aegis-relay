@@ -52,7 +52,7 @@ rm -f "$TOKEN_ENV"; TOKEN=
   printf 'PANEL_URL=%s\n' "$PANEL"
   printf 'AGENT_DOMAIN=%s\n' "$DOMAIN"
   printf 'AGENT_EMAIL=%s\n' "$EMAIL"
-  printf 'AGENT_VERSION=0.7.0\n'
+  printf 'AGENT_VERSION=0.8.0\n'
   printf 'AGENT_PROXY_PUBLISH_IP=127.0.0.1\n'
 } > .env
 chmod 600 .env

@@ -14,7 +14,7 @@ import { Metrics } from './metrics.js';
 import { telemetryFromMetrics } from './telemetry.js';
 
 const DATA_DIR=process.env.AGENT_DATA_DIR||'/app/agent-data',IDENTITY_FILE=path.join(DATA_DIR,'identity.json'),CURRENT_FILE=path.join(DATA_DIR,'current.snapshot'),PREVIOUS_FILE=path.join(DATA_DIR,'previous.snapshot'),METRICS_FILE=path.join(DATA_DIR,'metrics.enc');
-const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=process.env.AGENT_VERSION||'0.7.0',PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
+const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=process.env.AGENT_VERSION||'0.8.0',PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
 const sha256=value=>b64u(crypto.createHash('sha256').update(value).digest());
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 

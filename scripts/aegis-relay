@@ -7,6 +7,12 @@ case "$ACTION" in
     [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay domain panel.example.com admin@example.com" >&2; exit 1; }
     exec "$INSTALL_DIR/scripts/configure-domain.sh" "$2" "$3"
     ;;
+  proxy-domain)
+    [ "$#" -eq 2 ] || { echo "用法: sudo aegis-relay proxy-domain emby.example.com" >&2; exit 1; }
+    EMAIL=$(sed -n 's/^CERTIFICATE_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
+    [ -n "$EMAIL" ] || { echo "请先在部署向导保存证书邮箱，或执行 aegis-relay domain" >&2; exit 1; }
+    exec "$INSTALL_DIR/scripts/configure-local-domain.sh" "$2" "$EMAIL"
+    ;;
   update)
     exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh)"
     ;;
@@ -16,5 +22,5 @@ case "$ACTION" in
   status)
     cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose ps; else docker-compose ps; fi
     ;;
-  *) echo "用法: aegis-relay {status|logs|update|domain DOMAIN EMAIL}" >&2; exit 1;;
+  *) echo "用法: aegis-relay {status|logs|update|domain DOMAIN EMAIL|proxy-domain DOMAIN}" >&2; exit 1;;
 esac
