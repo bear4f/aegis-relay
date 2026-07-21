@@ -2,7 +2,7 @@
 set -eu
 umask 077
 INSTALL_DIR="/opt/aegis-relay"
-DOMAIN=$1
+DOMAIN=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
 EMAIL=$2
 
 [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行" >&2; exit 1; }
@@ -33,6 +33,7 @@ server {
     server_name $DOMAIN;
     access_log off;
     client_max_body_size 0;
+    if (\$host != $DOMAIN) { return 421; }
 
     location = /$ADMIN_PATH { return 301 /$ADMIN_PATH/; }
     location ^~ /$ADMIN_PATH/ {

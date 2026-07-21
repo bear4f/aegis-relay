@@ -2,7 +2,7 @@
 set -eu
 umask 077
 INSTALL_DIR=/opt/aegis-relay-agent
-DOMAIN=$1
+DOMAIN=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
 EMAIL=$2
 [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行" >&2; exit 1; }
 printf '%s' "$DOMAIN" | grep -Eq '^[A-Za-z0-9.-]+$' || { echo "域名格式无效" >&2; exit 1; }
@@ -18,6 +18,7 @@ server {
     server_name $DOMAIN;
     access_log off;
     client_max_body_size 0;
+    if (\$host != $DOMAIN) { return 421; }
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
