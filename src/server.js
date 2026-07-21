@@ -40,6 +40,7 @@ const appjs = fs.readFileSync(path.join(ROOT,'web','app.js'));
 const stylesheet = fs.readFileSync(path.join(ROOT,'web','style.css'));
 const helpStylesheet = fs.readFileSync(path.join(ROOT,'web','help.css'));
 const agentInstaller = fs.readFileSync(path.join(ROOT,'scripts','agent-install.sh'));
+const agentUpgrader = fs.readFileSync(path.join(ROOT,'scripts','agent-upgrade.sh'));
 
 function headers(extra = {}) { return { 'cache-control':'no-store', 'content-security-policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'permissions-policy':'camera=(), microphone=(), geolocation=()', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff', 'x-frame-options':'DENY', ...extra }; }
 function json(res, status, body, extra = {}) { res.writeHead(status, headers({ 'content-type':'application/json; charset=utf-8', ...extra })); res.end(JSON.stringify(body)); }
@@ -97,7 +98,7 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   requireAuth(req);
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>Number(b.favorite)-Number(a.favorite)||a.sortOrder-b.sortOrder||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/agents') return json(res,200,{agents:store.data.agents.map(agent=>publicAgent(agent,store.data,agent.id===LOCAL_AGENT_ID?localAgent.status():null))});
-  if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}
+  if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain,email:b.email});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}
   if (req.method === 'GET' && rel === '/dashboard') return json(res,200,metrics.snapshot(store.data.routes));
   if (req.method === 'GET' && rel === '/deployment') return json(res,200,{adminPath:cookiePath,secureCookies:cfg.secureCookies,publicBaseUrl:cfg.publicBaseUrl,httpsReady:cfg.secureCookies&&cfg.publicBaseUrl.startsWith('https://')});
   if (req.method === 'GET' && rel === '/notifications') return json(res,200,notifier.view());
@@ -142,7 +143,7 @@ function relayFailed(res,err){console.error('[aegis] relay error',err&&err.stack
 const proxy=http.createServer((req,res)=>{
   res.on('error',()=>{});
   let pathname; try{pathname=new URL(req.url,'http://relay.invalid').pathname}catch{return relayFailed(res,new Error('invalid request target'))}
-  try{if(pathname==='/agent-install.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentInstaller)}const out=pathname.startsWith('/api/agent/v1/')?agentApi.handle(req,res):(isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res));if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
+  try{if(pathname==='/agent-install.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentInstaller)}if(pathname==='/agent-upgrade.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentUpgrader)}const out=pathname.startsWith('/api/agent/v1/')?agentApi.handle(req,res):(isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):relay(req,res));if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
   catch(err){relayFailed(res,err)}
 });
 proxy.requestTimeout=0;proxy.headersTimeout=15_000;

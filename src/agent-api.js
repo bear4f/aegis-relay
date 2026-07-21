@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import { b64u, randomToken, timingEqual } from './security.js';
 import { ensurePanelSigningIdentity } from './snapshot.js';
+import { compileAgentDesiredSnapshot } from './snapshot.js';
 import { normalizeAgentDomain, replaceAgentDeployments } from './agent-registry.js';
+import { sealAgentSnapshot } from './agent-config.js';
 
 export const AGENT_PROTOCOL_VERSION=1;
 export const ENROLLMENT_TTL_MS=10*60_000;
@@ -14,6 +16,7 @@ const safeName=value=>{
   if(!name||name.length>80||/[\r\n\0]/.test(name))throw new Error('机器名称应为 1–80 个字符');
   return name;
 };
+const safeEmail=value=>{const email=String(value||'').trim();if(email&&!/^[^\s@]+@[^\s@]+$/.test(email))throw new Error('证书邮箱格式无效');return email;};
 const shellQuote=value=>`'${String(value).replaceAll("'",`'"'"'`)}'`;
 
 function publicHttpsOrigin(value) {
@@ -78,9 +81,9 @@ function validatePublicKey(value,expectedType) {
   } catch { throw Object.assign(new Error(`无效的 ${expectedType} 公钥`),{status:400}); }
 }
 
-export function enrollmentInstallCommand({publicBaseUrl,token,name,domain}) {
+export function enrollmentInstallCommand({publicBaseUrl,token,name,domain,email=''}) {
   const origin=publicHttpsOrigin(publicBaseUrl);
-  return `curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))}${domain?` --domain ${shellQuote(normalizeAgentDomain(domain))}`:''}`;
+  return `curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))}${domain?` --domain ${shellQuote(normalizeAgentDomain(domain))}`:''}${email?` --email ${shellQuote(safeEmail(email))}`:''}`;
 }
 
 function canonicalQuery(url) {
@@ -112,9 +115,10 @@ export class AgentApi {
   constructor({store,version='0.0.0'}) { this.store=store;this.version=version;this.panelIdentity=ensurePanelSigningIdentity(store);this.nonces=new Map(); }
 
   send(res,status,payload,requestNonce='enroll') {
-    const raw=Buffer.from(JSON.stringify(payload)),timestamp=nowSeconds(),contentHash=sha256(raw);
+    const raw=status===204?Buffer.alloc(0):Buffer.from(JSON.stringify(payload)),timestamp=nowSeconds(),contentHash=sha256(raw);
     const signature=b64u(crypto.sign(null,Buffer.from(panelResponseInput({status,requestNonce,timestamp,contentHash})),importPanelPrivate(this.panelIdentity)));
-    res.writeHead(status,baseHeaders({'x-aegis-panel-key-id':this.panelIdentity.keyId,'x-aegis-timestamp':String(timestamp),'x-aegis-content-sha256':contentHash,'x-aegis-signature':signature}));res.end(raw);
+    const responseHeaders=baseHeaders({'x-aegis-panel-key-id':this.panelIdentity.keyId,'x-aegis-timestamp':String(timestamp),'x-aegis-content-sha256':contentHash,'x-aegis-signature':signature});if(status===204)delete responseHeaders['content-type'];
+    res.writeHead(status,responseHeaders);res.end(raw);
   }
 
   reject(res,error,nonce='error') { this.send(res,error.status||400,{error:String(error.message||'request rejected').slice(0,160)},nonce); }
@@ -133,6 +137,12 @@ export class AgentApi {
     this.nonces.set(nonceKey,at);return {agent,nonce};
   }
 
+  desired(agent) {
+    const compiled=compileAgentDesiredSnapshot({data:this.store.data,agentId:agent.id,previousState:agent.desiredState||null,signingIdentity:this.panelIdentity});
+    agent.desiredState=compiled.state;agent.desiredRevision=compiled.snapshot.revision;agent.desiredHash=compiled.snapshot.hash;
+    return compiled.snapshot;
+  }
+
   async handle(req,res) {
     const url=new URL(req.url,'http://agent.invalid');let requestNonce='error';
     try{
@@ -146,7 +156,21 @@ export class AgentApi {
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/check-in'){
         const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
         const agent=verified.agent,at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.agentVersion=String(parsed.agentVersion||agent.agentVersion||'unknown').slice(0,32);agent.applyState=['active','waiting','error'].includes(parsed.applyState)?parsed.applyState:'waiting';agent.proxyHealthy=parsed.proxyHealthy===true;agent.appliedRevision=Number.isSafeInteger(parsed.currentRevision)?Math.max(0,parsed.currentRevision):Number(agent.appliedRevision||0);agent.capabilities=cleanCapabilities(parsed.capabilities);agent.reportedDomain=normalizeAgentDomain(parsed.domain||'');
-        this.store.save();return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:Number(agent.desiredRevision||0),heartbeatSeconds:30,agentVersion:this.version},requestNonce);
+        const snapshot=this.desired(agent);delete agent.error;this.store.save();return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:15,agentVersion:this.version},requestNonce);
+      }
+      if(req.method==='GET'&&url.pathname==='/api/agent/v1/config'){
+        const {raw}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
+        const after=Math.max(0,Number(url.searchParams.get('after')||0));if(!Number.isSafeInteger(after))throw Object.assign(new Error('invalid config revision'),{status:400,nonce:requestNonce});
+        const snapshot=this.desired(verified.agent),at=new Date().toISOString();verified.agent.lastSeen=at;verified.agent.updatedAt=at;this.store.save();
+        if(after>=snapshot.revision)return this.send(res,204,null,requestNonce);
+        return this.send(res,200,sealAgentSnapshot({agent:verified.agent,snapshot,panelIdentity:this.panelIdentity}),requestNonce);
+      }
+      if(req.method==='POST'&&url.pathname==='/api/agent/v1/ack'){
+        const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;const agent=verified.agent,revision=Number(parsed.revision),status=parsed.status;
+        if(!Number.isSafeInteger(revision)||revision<1||!['applied','rejected'].includes(status))throw Object.assign(new Error('invalid config acknowledgement'),{status:400,nonce:requestNonce});
+        if(revision!==Number(agent.desiredRevision)||!timingEqual(parsed.hash||'',agent.desiredHash||''))throw Object.assign(new Error('config acknowledgement does not match desired revision'),{status:409,nonce:requestNonce});
+        const at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.lastAck={revision,hash:parsed.hash,status,at,error:String(parsed.error||'').slice(0,240)};agent.applyState=status==='applied'?'active':'error';agent.proxyHealthy=parsed.proxyHealthy===true;if(status==='applied'){agent.appliedRevision=revision;agent.appliedHash=parsed.hash;delete agent.error;}else agent.error=agent.lastAck.error||'配置被 Agent 拒绝';
+        this.store.audit(`agent.config_${status}`,req.socket.remoteAddress||'unknown',`${agent.id} revision ${revision}`);return this.send(res,200,{ok:true,revision},requestNonce);
       }
       throw Object.assign(new Error('not found'),{status:404});
     }catch(error){return this.reject(res,error,error.nonce||requestNonce);}

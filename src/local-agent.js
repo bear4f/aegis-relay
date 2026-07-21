@@ -41,7 +41,7 @@ function open(payload, encodedKey) {
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.data,'base64url')),decipher.final()]));
 }
 
-function runtimeRoutes(nodes) {
+export function runtimeRoutes(nodes) {
   return nodes.map(node=>({
     id:node.id,alias:node.alias,name:node.name,enabled:node.enabled,upstreams:node.upstreams,playbackUpstreams:node.playbackUpstreams,
     allowPrivate:node.allowPrivate,tlsVerify:node.tlsVerify,showOnHome:node.showOnHome,

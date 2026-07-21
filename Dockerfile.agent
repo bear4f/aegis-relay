@@ -9,4 +9,5 @@ WORKDIR /app
 COPY --chown=aegis:aegis package.json ./
 COPY --chown=aegis:aegis src ./src
 USER aegis
+EXPOSE 8080
 CMD ["node","src/agent-main.js"]

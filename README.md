@@ -9,7 +9,7 @@ https://relay.example.com/r/family/<独立访问密钥>/
 
 上游域名、端口和协议不会出现在客户端地址中。管理员登录后可以随时查看和复制完整客户端地址；连接密码与其他配置一起保存在 AES-256-GCM 加密的数据文件中，代理校验仍使用 HMAC 摘要。
 
-> 当前为安全预览版 `0.5.0`。首次部署建议先在测试域名验证，再承载正式节点。
+> 当前为安全预览版 `0.6.0`。首次部署建议先在测试域名验证，再承载正式节点。
 
 ## 设计来源与原创边界
 
@@ -34,10 +34,10 @@ AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离
 - **线路诊断**：管理面展示连续失败、熔断状态、重试时间和最近成功时间，不显示真实上游。
 - **流量治理**：按节点统计请求、播放请求、上下行流量、错误和活动连接；支持 Mbps 限速与月度 GB 配额。
 - **完整控制台**：仪表盘、节点卡片、流量趋势、TLS/Emby 版本诊断、安全审计、配置导入导出和 HTTPS 部署状态集中呈现。
-- **代理机器注册**：玻璃拟态控制台可生成 10 分钟有效的一次性安装指令；远程机器使用 Ed25519/X25519 身份注册、签名心跳和 nonce 防重放，卸载后在面板保持失联，直到管理员删除。
+- **多机代理数据面**：玻璃拟态控制台可生成 10 分钟有效的一次性安装指令；远程机器使用 Ed25519/X25519 身份注册、拉取仅属于自己的加密节点快照、原子应用并回传版本，卸载后在面板保持失联，直到管理员删除。
 - **保号提醒**：可配置节点维护周期，通过 Telegram Bot 推送提醒；完成保号后在节点卡片重置周期。
 
-`0.5.0` 已完成远程 Agent 的安全注册、自动显示、心跳与卸载闭环。远程配置长轮询、加密快照应用和实际播放数据面仍在 Phase 2 后半段；在这些能力完成前，远程卡片会明确显示“已注册 · 等待配置”，不会误报为可代理。现有本机反代不受影响。
+`0.6.0` 已完成远程 Agent 的安全注册、签名轮询、按机器加密快照、离线缓存、原子应用、ACK 回执和实际播放数据面。控制面离线时，Agent 继续使用最后一份已验签配置；面板会分别显示目标版本与已应用版本。现有本机反代不受影响。
 
 兼容性请求头只适用于你拥有或已获明确授权的 Emby 上游。AegisRelay 不内置第三方客户端冒充模板，也不应用于绕过上游禁止反代、客户端限制或其他访问控制。详见 [节点管理说明](docs/NODE_MANAGEMENT.md)。
 
@@ -116,6 +116,24 @@ sudo aegis-relay update
 systemctl status certbot.timer
 certbot certificates
 ```
+
+远程代理机使用独立命令：
+
+```bash
+sudo aegis-relay-agent status
+sudo aegis-relay-agent logs
+sudo aegis-relay-agent update
+sudo aegis-relay-agent domain relay.example.com admin@example.com
+sudo aegis-relay-agent uninstall
+```
+
+从 `0.5.0` 升级远程代理机时，旧管理命令还没有 `update` 子命令，可执行一次兼容升级：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh | sudo sh
+```
+
+该升级会保留原 Agent 身份和注册关系，不需要在面板删除机器或重新插针。升级后通常在 15 秒内完成配置同步；卡片应显示相同的目标/已应用 revision，并进入“代理运行中”。
 
 如果 DNS 或证书申请失败，脚本不会关闭 9080 临时入口；修复后重新执行 `aegis-relay domain`。Nginx 配置校验失败会自动恢复上一份站点配置。
 

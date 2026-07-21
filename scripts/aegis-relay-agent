@@ -6,11 +6,17 @@ compose(){ if docker compose version >/dev/null 2>&1; then docker compose -f com
 case "$ACTION" in
   status) cd "$INSTALL_DIR"; compose ps;;
   logs) cd "$INSTALL_DIR"; compose logs -f --tail=200;;
+  update) exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)";;
+  domain)
+    [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay-agent domain relay.example.com admin@example.com" >&2; exit 1; }
+    exec "$INSTALL_DIR/agent-configure-domain.sh" "$2" "$3"
+    ;;
   uninstall)
     cd "$INSTALL_DIR"; compose down
+    if [ -e /etc/nginx/sites-enabled/aegis-relay-agent.conf ]; then rm -f /etc/nginx/sites-enabled/aegis-relay-agent.conf; nginx -t && systemctl reload nginx || true; fi
     cd /; rm -rf -- "$INSTALL_DIR"
     rm -f -- /usr/local/bin/aegis-relay-agent
-    echo "Agent 已卸载；控制面中的机器记录会保持失联，需由管理员手动删除。"
+    echo "Agent 已卸载；TLS 证书未删除，控制面中的机器记录会保持失联，需由管理员手动删除。"
     ;;
-  *) echo "用法: aegis-relay-agent {status|logs|uninstall}" >&2; exit 1;;
+  *) echo "用法: aegis-relay-agent {status|logs|update|domain DOMAIN EMAIL|uninstall}" >&2; exit 1;;
 esac

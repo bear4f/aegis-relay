@@ -3,13 +3,14 @@ set -eu
 umask 077
 INSTALL_DIR=/opt/aegis-relay-agent
 REPO=bear4f/aegis-relay
-PANEL= TOKEN= NAME= DOMAIN=
+PANEL= TOKEN= NAME= DOMAIN= EMAIL=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --panel) PANEL=${2:-}; shift 2;;
     --token) TOKEN=${2:-}; shift 2;;
     --name) NAME=${2:-}; shift 2;;
     --domain) DOMAIN=${2:-}; shift 2;;
+    --email) EMAIL=${2:-}; shift 2;;
     *) echo "未知参数: $1" >&2; exit 2;;
   esac
 done
@@ -50,9 +51,19 @@ rm -f "$TOKEN_ENV"; TOKEN=
 {
   printf 'PANEL_URL=%s\n' "$PANEL"
   printf 'AGENT_DOMAIN=%s\n' "$DOMAIN"
-  printf 'AGENT_VERSION=0.5.0\n'
+  printf 'AGENT_EMAIL=%s\n' "$EMAIL"
+  printf 'AGENT_VERSION=0.6.0\n'
+  printf 'AGENT_PROXY_PUBLISH_IP=127.0.0.1\n'
 } > .env
 chmod 600 .env
 if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml up -d; else docker-compose -f compose.agent.yml up -d; fi
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
-echo "Agent 已注册并开始心跳。卸载命令: sudo aegis-relay-agent uninstall"
+install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DIR/agent-configure-domain.sh"
+if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
+  if ! "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL"; then
+    echo "Agent 已同步并监听 127.0.0.1:8080，但域名证书配置未完成。修复 DNS 后执行: sudo aegis-relay-agent domain $DOMAIN $EMAIL" >&2
+  fi
+else
+  echo "Agent 已同步并监听 127.0.0.1:8080。配置 HTTPS: sudo aegis-relay-agent domain 域名 邮箱"
+fi
+echo "卸载命令: sudo aegis-relay-agent uninstall"
