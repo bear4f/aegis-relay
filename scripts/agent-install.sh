@@ -59,6 +59,32 @@ chmod 600 .env
 if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml up -d; else docker-compose -f compose.agent.yml up -d; fi
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
 install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DIR/agent-configure-domain.sh"
+install -m 0755 "$TMP_DIR/source/scripts/agent-host-domain-apply.sh" "$INSTALL_DIR/agent-host-domain-apply.sh"
+# The agent container is unprivileged, so a narrowly scoped host unit performs domain switches for it.
+if command -v systemctl >/dev/null 2>&1; then
+  cat > /etc/systemd/system/aegis-relay-agent-domain.service <<EOF
+[Unit]
+Description=AegisRelay agent constrained proxy domain switch
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh $INSTALL_DIR/agent-host-domain-apply.sh
+EOF
+  cat > /etc/systemd/system/aegis-relay-agent-domain.path <<EOF
+[Unit]
+Description=Watch AegisRelay agent proxy domain requests
+
+[Path]
+PathExists=$INSTALL_DIR/data/host-domain-request.json
+Unit=aegis-relay-agent-domain.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now aegis-relay-agent-domain.path
+fi
 if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
   if ! "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL"; then
     echo "Agent 已同步并监听 127.0.0.1:8080，但域名证书配置未完成。修复 DNS 后执行: sudo aegis-relay-agent domain $DOMAIN $EMAIL" >&2

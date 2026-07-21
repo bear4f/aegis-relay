@@ -14,6 +14,7 @@ import { Metrics } from './metrics.js';
 import { telemetryFromMetrics } from './telemetry.js';
 
 const DATA_DIR=process.env.AGENT_DATA_DIR||'/app/agent-data',IDENTITY_FILE=path.join(DATA_DIR,'identity.json'),CURRENT_FILE=path.join(DATA_DIR,'current.snapshot'),PREVIOUS_FILE=path.join(DATA_DIR,'previous.snapshot'),METRICS_FILE=path.join(DATA_DIR,'metrics.enc');
+const DOMAIN_REQUEST_FILE=path.join(DATA_DIR,'host-domain-request.json'),DOMAIN_STATUS_FILE=path.join(DATA_DIR,'host-domain-status.json');
 const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=process.env.AGENT_VERSION||'0.8.0',PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
 const sha256=value=>b64u(crypto.createHash('sha256').update(value).digest());
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -59,14 +60,46 @@ class RemoteConfig {
   apply(snapshot){const decision=verifySnapshot(snapshot,panelIdentity(this.identity),{currentRevision:this.revision,currentHash:this.hash});if(decision.status==='noop')return decision;const routes=validateRoutes(runtimeRoutes(snapshot.nodes));if(fs.existsSync(CURRENT_FILE))writeAtomic(PREVIOUS_FILE,fs.readFileSync(CURRENT_FILE));writeAtomic(CURRENT_FILE,sealLocal(snapshot,this.identity));this.routeSource.apply(routes);this.revision=snapshot.revision;this.hash=snapshot.hash;this.applyState='active';this.error='';return decision;}
 }
 
+function readDomainStatus(){
+  try{
+    const value=JSON.parse(fs.readFileSync(DOMAIN_STATUS_FILE,'utf8'));
+    if(!value||typeof value!=='object')return null;
+    return {requestId:String(value.requestId||'').slice(0,80),state:['pending','applying','active','failed'].includes(value.state)?value.state:'failed',
+      desiredDomain:String(value.desiredDomain||'').slice(0,253),currentDomain:String(value.currentDomain||'').slice(0,253),
+      message:String(value.message||'').slice(0,500),updatedAt:String(value.updatedAt||'').slice(0,40)};
+  }catch{return null}
+}
+// The agent runs unprivileged in a container, so it cannot touch host Nginx or certbot. It drops a
+// validated request file into the mounted data dir; a narrowly scoped host unit performs the switch.
+function requestDomainSwitch(domain,email){
+  const desiredDomain=String(domain||'').trim().toLowerCase(),certificateEmail=String(email||'').trim().toLowerCase();
+  if(!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(desiredDomain))return null;
+  if(!/^[^\s@]+@[^\s@]+$/.test(certificateEmail)||certificateEmail.length>254)return null;
+  const requestId=randomToken(18),requestedAt=new Date().toISOString();
+  writeAtomic(DOMAIN_STATUS_FILE,`${JSON.stringify({requestId,state:'pending',desiredDomain,currentDomain:effectiveDomain(),message:'等待主机申请证书并切换 Nginx',updatedAt:requestedAt})}\n`);
+  writeAtomic(DOMAIN_REQUEST_FILE,`${JSON.stringify({version:1,requestId,desiredDomain,certificateEmail,requestedAt})}\n`);
+  return desiredDomain;
+}
+function domainSwitchNeeded(desired){
+  if(!desired||desired===effectiveDomain())return false;
+  if(fs.existsSync(DOMAIN_REQUEST_FILE))return false;
+  const status=readDomainStatus();
+  if(!status||status.desiredDomain!==desired)return true;
+  if(['pending','applying'].includes(status.state))return false;
+  if(status.state==='active')return false;
+  const age=Date.now()-Date.parse(status.updatedAt||'');
+  return Number.isFinite(age)&&age>10*60_000;
+}
+function effectiveDomain(){const status=readDomainStatus();return status&&status.state==='active'&&status.currentDomain?status.currentDomain:AGENT_DOMAIN}
+
 async function acknowledge(identity,config,status,error='',proxyHealthy=true){const payload={protocolVersion:1,revision:config.revision,hash:config.hash,status,error:String(error||'').slice(0,240),proxyHealthy};const result=await signedRequest(identity,'POST','/api/agent/v1/ack',payload);if(!result.response.ok)throw new Error(result.data?.error||`ack failed (${result.response.status})`);}
 
 async function pollConfig(identity,config,proxyHealthy){const pathAndQuery=`/api/agent/v1/config?after=${config.revision}&wait=0`,result=await signedRequest(identity,'GET',pathAndQuery);if(result.response.status===204)return false;if(!result.response.ok)throw new Error(result.data?.error||`config poll failed (${result.response.status})`);let snapshot;try{snapshot=openAgentSnapshot({envelope:result.data,identity});config.apply(snapshot);await acknowledge(identity,config,'applied','',proxyHealthy);return true;}catch(error){if(snapshot)try{await acknowledge(identity,{revision:snapshot.revision,hash:snapshot.hash},'rejected',error.message,proxyHealthy)}catch{}throw error;}}
 
 function startProxy(config,identity,metricStore){const metrics=new Metrics(metricStore),key=storageKey(identity),relay=makeProxyHandler(config.routeSource,key,metrics),server=http.createServer((req,res)=>{res.on('error',()=>{});try{const out=relay(req,res);if(out&&typeof out.catch==='function')out.catch(error=>{console.error('[aegis-agent] relay error',error?.message||error);if(!res.headersSent&&!res.writableEnded){res.writeHead(502,{'cache-control':'no-store'});res.end('bad gateway')}})}catch(error){if(!res.headersSent&&!res.writableEnded){res.writeHead(502,{'cache-control':'no-store'});res.end('bad gateway')}}});server.requestTimeout=0;server.headersTimeout=15_000;server.on('clientError',(_error,socket)=>{if(!socket.destroyed)socket.destroy()});server.on('upgrade',(req,socket,head)=>{socket.on('error',()=>socket.destroy());try{handleUpgrade(req,socket,head,config.routeSource,key)}catch{socket.destroy()}});return new Promise((resolve,reject)=>{server.once('error',reject);server.listen(PROXY_PORT,'0.0.0.0',()=>resolve({server,metrics}))})}
 
-async function checkIn(identity,config,startedAt,bootId,proxyHealthy,telemetry){const payload={protocolVersion:1,agentVersion:VERSION,bootId,uptimeSeconds:Math.floor((Date.now()-startedAt)/1000),currentRevision:config.revision,currentConfigId:config.hash,applyState:config.applyState,proxyHealthy,domain:AGENT_DOMAIN,certificateNotAfter:null,capabilities:['registry-v1','config-v1','proxy-v1','telemetry-v1'],telemetry},result=await signedRequest(identity,'POST','/api/agent/v1/check-in',payload);if(!result.response.ok)throw new Error(result.data?.error||`check-in failed (${result.response.status})`);return result.data;}
+async function checkIn(identity,config,startedAt,bootId,proxyHealthy,telemetry){const payload={protocolVersion:1,agentVersion:VERSION,bootId,uptimeSeconds:Math.floor((Date.now()-startedAt)/1000),currentRevision:config.revision,currentConfigId:config.hash,applyState:config.applyState,proxyHealthy,domain:effectiveDomain(),domainStatus:readDomainStatus(),certificateNotAfter:null,capabilities:['registry-v1','config-v1','proxy-v1','telemetry-v1'],telemetry},result=await signedRequest(identity,'POST','/api/agent/v1/check-in',payload);if(!result.response.ok)throw new Error(result.data?.error||`check-in failed (${result.response.status})`);return result.data;}
 
-async function run(){const identity=loadIdentity();if(identity.panelUrl!==PANEL_URL)throw new Error('pinned panel URL mismatch');const config=new RemoteConfig(identity);try{config.load()}catch(error){config.error=`cached config rejected: ${error.message}`;config.applyState='error';}const metricStore=loadMetricStore(identity),runtime=await startProxy(config,identity,metricStore),server=runtime.server,metrics=runtime.metrics,startedAt=Date.now(),bootId=randomToken(16);let delay=2_000,lastMetricSave=0;for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{try{metricStore.save()}catch{}server.close(()=>process.exit(0))});for(;;){try{const telemetry=telemetryFromMetrics(metrics.snapshot(config.routeSource.getRoutes()));if(Date.now()-lastMetricSave>=60_000){metricStore.save();lastMetricSave=Date.now()}const status=await checkIn(identity,config,startedAt,bootId,true,telemetry);if(Number(status.desiredRevision||0)>config.revision)await pollConfig(identity,config,true);delay=Math.max(5_000,Number(status.heartbeatSeconds||15)*1000)}catch(error){config.error=String(error.message||error).slice(0,160);console.error(`[aegis-agent] ${config.error}`);delay=Math.min(300_000,Math.max(2_000,delay*2))}await sleep(delay)}}
+async function run(){const identity=loadIdentity();if(identity.panelUrl!==PANEL_URL)throw new Error('pinned panel URL mismatch');const config=new RemoteConfig(identity);try{config.load()}catch(error){config.error=`cached config rejected: ${error.message}`;config.applyState='error';}const metricStore=loadMetricStore(identity),runtime=await startProxy(config,identity,metricStore),server=runtime.server,metrics=runtime.metrics,startedAt=Date.now(),bootId=randomToken(16);let delay=2_000,lastMetricSave=0;for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{try{metricStore.save()}catch{}server.close(()=>process.exit(0))});for(;;){try{const telemetry=telemetryFromMetrics(metrics.snapshot(config.routeSource.getRoutes()));if(Date.now()-lastMetricSave>=60_000){metricStore.save();lastMetricSave=Date.now()}const status=await checkIn(identity,config,startedAt,bootId,true,telemetry);if(domainSwitchNeeded(status.desiredDomain))requestDomainSwitch(status.desiredDomain,status.certificateEmail);if(Number(status.desiredRevision||0)>config.revision)await pollConfig(identity,config,true);delay=Math.max(5_000,Number(status.heartbeatSeconds||15)*1000)}catch(error){config.error=String(error.message||error).slice(0,160);console.error(`[aegis-agent] ${config.error}`);delay=Math.min(300_000,Math.max(2_000,delay*2))}await sleep(delay)}}
 
 if(process.argv.includes('--enroll'))await enroll();else await run();

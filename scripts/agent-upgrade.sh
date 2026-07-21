@@ -17,6 +17,32 @@ install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DI
 set_env(){ KEY=$1 VALUE=$2 FILE="$INSTALL_DIR/.env" TMP="$INSTALL_DIR/.env.tmp"; awk -v key="$KEY" -v value="$VALUE" 'BEGIN{done=0} $0 ~ "^"key"=" {print key"="value;done=1;next} {print} END{if(!done)print key"="value}' "$FILE" > "$TMP"; chmod 600 "$TMP"; mv "$TMP" "$FILE"; }
 set_env AGENT_VERSION 0.8.0
 set_env AGENT_PROXY_PUBLISH_IP 127.0.0.1
+install -m 0755 "$TMP_DIR/source/scripts/agent-host-domain-apply.sh" "$INSTALL_DIR/agent-host-domain-apply.sh"
+# Existing machines predate the domain watcher, so install it here as well.
+if command -v systemctl >/dev/null 2>&1 && [ -f "$INSTALL_DIR/agent-host-domain-apply.sh" ]; then
+  cat > /etc/systemd/system/aegis-relay-agent-domain.service <<EOF
+[Unit]
+Description=AegisRelay agent constrained proxy domain switch
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh $INSTALL_DIR/agent-host-domain-apply.sh
+EOF
+  cat > /etc/systemd/system/aegis-relay-agent-domain.path <<EOF
+[Unit]
+Description=Watch AegisRelay agent proxy domain requests
+
+[Path]
+PathExists=$INSTALL_DIR/data/host-domain-request.json
+Unit=aegis-relay-agent-domain.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now aegis-relay-agent-domain.path
+fi
 cd "$INSTALL_DIR"; docker build -f Dockerfile.agent -t aegis-relay-agent:local .
 if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml up -d --force-recreate; else docker-compose -f compose.agent.yml up -d --force-recreate; fi
 echo "Agent 已升级到 0.8.0，原注册身份、本地快照和流量统计已保留。"
