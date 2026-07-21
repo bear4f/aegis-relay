@@ -2,7 +2,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const scriptPath=new URL(document.currentScript?.src||location.href).pathname;
 const base=scriptPath.endsWith('/app.js')?scriptPath.replace(/\/app\.js$/,'/api'):location.pathname.replace(/\/$/,'')+'/api';
 const state={csrf:'',routes:[],agents:[],panelVersion:'',dashboard:null,editing:null,page:'dashboard'};
-const titles={dashboard:'仪表盘',nodes:'节点管理',agents:'代理机器',traffic:'流量统计',diagnostics:'故障诊断',audit:'安全审计',notifications:'通知提醒',deployment:'部署向导'};
+const titles={dashboard:'仪表盘',nodes:'节点管理',agents:'代理机器',traffic:'流量统计',diagnostics:'故障诊断',audit:'安全审计',notifications:'通知提醒',account:'个人设置',deployment:'部署向导'};
 // One-click client-identity templates for authorized upstreams. Device ID stays untouched so it remains unique per install.
 const UA_PRESETS=[
   {name:'透传（默认）',clear:true},
@@ -47,7 +47,7 @@ async function start(){
   try{const r=await fetch(base+'/session',{headers:{'content-type':'application/json'}});if(r.ok){const d=await r.json();if(d&&d.csrf){state.csrf=d.csrf;await enterApp();return}}}catch{}
   try{const status=await call('/status');$('#auth').classList.remove('hidden');$(status.initialized?'#login':'#setup').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}
 }
-$('#setup-btn').onclick=async()=>{try{const data=await call('/setup',{method:'POST',body:JSON.stringify({username:value('#su-user'),password:value('#su-pass'),setupToken:value('#su-token')})});showSecret(`TOTP Secret\n${data.secret}\n\n恢复码（每行一个）\n${data.recovery.join('\n')}\n\n配置 URI\n${data.totpUri}`,{eyebrow:'2FA RECOVERY',title:'保存 2FA 恢复信息',description:'恢复码只在初始化时显示一次，请立即离线保存。'});$('#setup').classList.add('hidden');$('#login').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}};
+$('#setup-btn').onclick=async()=>{try{await call('/setup',{method:'POST',body:JSON.stringify({username:value('#su-user'),password:value('#su-pass'),setupToken:value('#su-token')})});$('#setup').classList.add('hidden');$('#login').classList.remove('hidden');$('#gate-msg').textContent='管理员已创建，请用密码登录；可稍后在“个人设置”开启两步验证。'}catch(e){$('#gate-msg').textContent=e.message}};
 $('#login-btn').onclick=async()=>{try{const data=await call('/login',{method:'POST',body:JSON.stringify({password:value('#password'),code:value('#code')})});state.csrf=data.csrf;await enterApp()}catch(e){$('#gate-msg').textContent=e.message}};
 $('#logout').onclick=async()=>{try{await call('/logout',{method:'POST',body:'{}'})}finally{location.reload()}};
 
@@ -157,7 +157,48 @@ function watchDomainSwitch(){clearTimeout(domainWatchTimer);domainWatchTimer=set
 async function loadDeployment(){const d=await call('/deployment');$('#deployment-status').innerHTML=`<article class="deploy-card"><small>管理面板域名</small><strong>${escapeHtml(d.publicBaseUrl||'尚未设置')}</strong></article><article class="deploy-card"><small>本地代理域名</small><strong>${escapeHtml(d.localProxyBaseUrl||'尚未设置')}</strong></article><article class="deploy-card"><small>域名隔离</small><strong>${d.splitDomains?'已分离':'等待在代理机器中切换'}</strong></article>`;setValue('#certificate-email',d.certificateEmail||'');$('#certificate-email-state').textContent=d.certificateEmail?'已配置':'未配置';$('#certificate-email-state').className=`pill ${d.certificateEmail?'on':'warn'}`;return d}
 async function loadNotifications(){const d=await call('/notifications');$('#telegram-state').textContent=d.telegram.configured?'已配置':'未配置';$('#telegram-enabled').checked=d.telegram.enabled;setValue('#telegram-chat','');setValue('#telegram-token','')}
 
-async function switchPage(page){state.page=page;$$('.page').forEach(x=>x.classList.add('hidden'));$(`#${page}-page`).classList.remove('hidden');$$('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#page-title').textContent=titles[page];$('#breadcrumb').textContent=`控制台 / ${titles[page]}`;$('#global-add').innerHTML=page==='agents'?'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加机器':'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点';$('#global-add').onclick=page==='agents'?openAgentModal:()=>openDrawer();if(page==='audit')await loadAudit();if(page==='agents')await loadAgents();if(page==='deployment')await loadDeployment();if(page==='notifications')await loadNotifications();if(page==='diagnostics')await loadRuntime()}
+
+function qrSvg(qr){
+  const quiet=4,scale=5,dim=(qr.size+quiet*2)*scale;
+  let path='';
+  qr.rows.forEach((row,y)=>{[...row].forEach((bit,x)=>{if(bit==='1')path+=`M${(x+quiet)*scale} ${(y+quiet)*scale}h${scale}v${scale}h-${scale}z`})});
+  return `<svg viewBox="0 0 ${dim} ${dim}" width="${dim}" height="${dim}" role="img" aria-label="两步验证二维码"><rect width="${dim}" height="${dim}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+}
+function showTotpStage(stage){for(const id of ['#totp-off','#totp-setup','#totp-on'])$(id).classList.toggle('hidden',id!=='#'+stage)}
+async function loadAccount(){
+  const d=await call('/account');
+  $('#account-user').textContent=d.username||'admin';
+  $('#totp-state').textContent=d.totpEnabled?'已开启':'未开启';
+  $('#totp-state').className=`pill ${d.totpEnabled?'on':'warn'}`;
+  $('#totp-hint').textContent=d.totpEnabled?`登录时需要输入动态验证码。剩余恢复码 ${d.recoveryRemaining} 个。`:'开启后，登录时除密码外还需要输入动态验证码。';
+  showTotpStage(d.totpEnabled?'totp-on':'totp-off');
+  for(const id of ['#pw-current','#pw-new','#pw-confirm','#totp-password','#totp-code','#totp-off-password','#totp-off-code'])setValue(id,'');
+}
+$('#save-password').onclick=async()=>{
+  if(value('#pw-new').length<14)return toast('新密码至少 14 位',true);
+  if(value('#pw-new')!==value('#pw-confirm'))return toast('两次输入的新密码不一致',true);
+  try{await call('/account/password',{method:'POST',body:JSON.stringify({currentPassword:value('#pw-current'),newPassword:value('#pw-new')})});toast('密码已更新');await loadAccount()}catch(e){toast(e.message,true)}
+};
+$('#totp-begin').onclick=async()=>{
+  try{
+    const d=await call('/account/totp/begin',{method:'POST',body:JSON.stringify({password:value('#totp-password')})});
+    $('#totp-qr').innerHTML=qrSvg(d.qr);$('#totp-secret').textContent=d.secret;
+    showTotpStage('totp-setup');setTimeout(()=>$('#totp-code').focus(),0);
+  }catch(e){toast(e.message,true)}
+};
+$('#totp-cancel').onclick=()=>showTotpStage('totp-off');
+$('#totp-confirm').onclick=async()=>{
+  try{
+    const d=await call('/account/totp/enable',{method:'POST',body:JSON.stringify({code:value('#totp-code')})});
+    await loadAccount();
+    showSecret(`恢复码（每行一个，只显示这一次）\n${d.recovery.join('\n')}`,{eyebrow:'2FA RECOVERY',title:'两步验证已开启',description:'请立即离线保存这些恢复码；丢失验证器时可用它们登录。'});
+  }catch(e){toast(e.message,true)}
+};
+$('#totp-disable').onclick=async()=>{
+  if(!confirm('关闭两步验证后，登录将只需要密码。确认继续吗？'))return;
+  try{await call('/account/totp/disable',{method:'POST',body:JSON.stringify({password:value('#totp-off-password'),code:value('#totp-off-code')})});toast('两步验证已关闭');await loadAccount()}catch(e){toast(e.message,true)}
+};
+async function switchPage(page){state.page=page;$$('.page').forEach(x=>x.classList.add('hidden'));$(`#${page}-page`).classList.remove('hidden');$$('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#page-title').textContent=titles[page];$('#breadcrumb').textContent=`控制台 / ${titles[page]}`;$('#global-add').innerHTML=page==='agents'?'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加机器':'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点';$('#global-add').onclick=page==='agents'?openAgentModal:()=>openDrawer();if(page==='audit')await loadAudit();if(page==='agents')await loadAgents();if(page==='deployment')await loadDeployment();if(page==='notifications')await loadNotifications();if(page==='account')await loadAccount();if(page==='diagnostics')await loadRuntime()}
 $$('[data-page]').forEach(b=>b.onclick=()=>switchPage(b.dataset.page));$$('[data-jump]').forEach(b=>b.onclick=()=>switchPage(b.dataset.jump));
 
 function setValue(id,v){$(id).value=v??''}function resetDrawer(){state.editing=null;$('#form-title').textContent='新增 Emby 节点';for(const id of ['#name','#alias','#access-key','#tags','#notes','#upstreams','#playback-upstreams','#speed-limit','#monthly-quota','#reminder-days','#profile-ua','#profile-client','#profile-device','#profile-device-id'])setValue(id,'');for(const id of ['#private','#show-home','#favorite'])setValue(id,'false');setValue('#access-mode','key');setValue('#tls','true');$('#access-mode').disabled=false;$('#access-key').disabled=false;$('#profile-enabled').checked=false;$('#save-node').textContent='创建节点';renderPresets();markActivePreset()}

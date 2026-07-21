@@ -17,6 +17,7 @@ import { ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgen
 import { AgentApi, enrollmentInstallCommand, issueEnrollment, normalizeCertificateEmail } from './agent-api.js';
 import { aggregateTelemetry, sanitizeTelemetry, telemetryFromMetrics } from './telemetry.js';
 import { activeLocalDomain, baseHostname, domainRequestRole, readDomainStatus, requestDomainSwitch } from './domain-control.js';
+import { qrRows } from './qr.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const APP_VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'),'utf8')).version;
@@ -95,15 +96,16 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
     const b = await body(req); if (!cfg.setupToken || !timingEqual(b.setupToken || '', cfg.setupToken)) { store.audit('setup.denied', ip(req)); return json(res, 403, { error:'invalid setup token' }); }
-    const secret = newTotpSecret(), recovery = Array.from({length:8},()=>randomToken(9));
-    store.data.admin = { username:String(b.username || 'admin').slice(0,64), passwordHash:hashPassword(b.password), totpSecret:secret, recoveryDigests:recovery.map(v=>tokenDigest(v,key)), createdAt:new Date().toISOString() };
+    // A fresh install is password-only; two-factor is opt-in from 个人设置 afterwards.
+    store.data.admin = { username:String(b.username || 'admin').slice(0,64), passwordHash:hashPassword(b.password), totpSecret:null, recoveryDigests:[], createdAt:new Date().toISOString() };
     store.audit('admin.initialized', ip(req));
-    const label = encodeURIComponent(`AegisRelay:${store.data.admin.username}`); return json(res, 201, { totpUri:`otpauth://totp/${label}?secret=${secret}&issuer=AegisRelay&digits=6&period=30`, secret, recovery });
+    return json(res, 201, { totpEnabled:false });
   }
   if (req.method === 'POST' && rel === '/login') {
     if (!store.data.admin || !loginLimiter.take(ip(req))) { store.audit('login.denied', ip(req)); return json(res, 429, { error:'try again later' }); }
-    const b = await body(req), a = store.data.admin; let second = verifyTotp(a.totpSecret, b.code);
-    if (!second && b.recovery) { const d=tokenDigest(String(b.recovery),key), idx=a.recoveryDigests.findIndex(x=>timingEqual(x,d)); if(idx>=0){a.recoveryDigests.splice(idx,1);store.save();second=true;} }
+    const b = await body(req), a = store.data.admin, totpOn = !!a.totpSecret;
+    let second = !totpOn || verifyTotp(a.totpSecret, b.code);
+    if (totpOn && !second && b.recovery) { const d=tokenDigest(String(b.recovery),key), idx=(a.recoveryDigests||[]).findIndex(x=>timingEqual(x,d)); if(idx>=0){a.recoveryDigests.splice(idx,1);store.save();second=true;} }
     if (!verifyPassword(b.password || '', a.passwordHash) || !second) { store.audit('login.failed', ip(req)); return json(res, 401, { error:'invalid credentials' }); }
     const sid=randomToken(), csrf=randomToken(24); sessions[sid]={csrf,expires:Date.now()+30*60_000};pruneSessions();store.audit('login.success',ip(req));
     const cookie=`aegis_session=${encodeURIComponent(sid)}; HttpOnly; SameSite=Strict; Path=${cookiePath}; Max-Age=604800${cfg.secureCookies?'; Secure':''}`; return json(res,200,{csrf},{'set-cookie':cookie});
@@ -114,6 +116,44 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   // strict cookie plus same-origin policy keep it unreadable to other sites.
   if (req.method === 'GET' && rel === '/session') { const s=auth(req); if(!s) return json(res,401,{error:'登录已失效，请重新登录'}); return json(res,200,{csrf:s.csrf,username:store.data.admin?.username||''}); }
   requireAuth(req);
+  const admin=()=>store.data.admin;
+  const otpUri=secret=>`otpauth://totp/${encodeURIComponent(`AegisRelay:${admin().username}`)}?secret=${secret}&issuer=AegisRelay&digits=6&period=30`;
+  if (req.method === 'GET' && rel === '/account') return json(res,200,{username:admin().username,totpEnabled:!!admin().totpSecret,recoveryRemaining:(admin().recoveryDigests||[]).length});
+  if (req.method === 'POST' && rel === '/account/password') {
+    const b=await body(req);
+    if(!verifyPassword(b.currentPassword||'',admin().passwordHash)){store.audit('account.password_denied',ip(req));return json(res,401,{error:'当前密码不正确'});}
+    admin().passwordHash=hashPassword(b.newPassword||'');
+    store.audit('account.password_changed',ip(req));store.save();
+    return json(res,200,{ok:true});
+  }
+  // Enrolment is two-step: the secret stays pending until a generated code proves the app has it.
+  if (req.method === 'POST' && rel === '/account/totp/begin') {
+    const b=await body(req);
+    if(!verifyPassword(b.password||'',admin().passwordHash))return json(res,401,{error:'当前密码不正确'});
+    const secret=newTotpSecret();
+    admin().pendingTotp={secret,startedAt:new Date().toISOString()};store.save();
+    const uri=otpUri(secret);
+    return json(res,200,{secret,uri,qr:qrRows(uri)});
+  }
+  if (req.method === 'POST' && rel === '/account/totp/enable') {
+    const b=await body(req),pending=admin().pendingTotp;
+    if(!pending?.secret)return json(res,409,{error:'请先重新生成二维码'});
+    if(!verifyTotp(pending.secret,b.code||'')){store.audit('account.totp_failed',ip(req));return json(res,401,{error:'验证码不正确，请确认手机时间已同步'});}
+    const recovery=Array.from({length:8},()=>randomToken(9));
+    admin().totpSecret=pending.secret;admin().recoveryDigests=recovery.map(v=>tokenDigest(v,key));
+    delete admin().pendingTotp;
+    store.audit('account.totp_enabled',ip(req));store.save();
+    return json(res,200,{ok:true,recovery});
+  }
+  if (req.method === 'POST' && rel === '/account/totp/disable') {
+    const b=await body(req);
+    if(!admin().totpSecret)return json(res,409,{error:'两步验证尚未开启'});
+    if(!verifyPassword(b.password||'',admin().passwordHash))return json(res,401,{error:'当前密码不正确'});
+    if(!verifyTotp(admin().totpSecret,b.code||''))return json(res,401,{error:'验证码不正确'});
+    admin().totpSecret=null;admin().recoveryDigests=[];delete admin().pendingTotp;
+    store.audit('account.totp_disabled',ip(req));store.save();
+    return json(res,200,{ok:true});
+  }
   if (req.method === 'GET' && rel === '/routes') return json(res,200,{routes:store.data.routes.map(publicRoute).sort((a,b)=>a.sortOrder-b.sortOrder||Number(b.favorite)-Number(a.favorite)||a.name.localeCompare(b.name))});
   if (req.method === 'GET' && rel === '/agents') return json(res,200,{panelVersion:APP_VERSION,agents:store.data.agents.map(agentView)});
   if (req.method === 'POST' && rel === '/agents/enrollment') {const b=await body(req),issued=issueEnrollment(store.data,{name:b.name,domain:b.domain,routeIds:b.routeIds});let command;try{command=enrollmentInstallCommand({publicBaseUrl:cfg.publicBaseUrl,token:issued.token,name:issued.record.name,domain:issued.record.domain,email:store.data.settings.certificateEmail});}catch(error){store.data.enrollmentTokens=store.data.enrollmentTokens.filter(item=>item!==issued.record);throw error;}store.audit('agent.enrollment_created',ip(req),issued.record.id);return json(res,201,{expiresAt:issued.record.expiresAt,command,uninstallCommand:'sudo aegis-relay-agent uninstall'});}

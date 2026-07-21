@@ -620,3 +620,12 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .data-table tr.dragging{opacity:.45}
 .data-table tr.drop-above td{box-shadow:inset 0 2px 0 var(--accent)}
 .data-table tr.drop-below td{box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* ============================================================ Account / 2FA */
+.totp-enroll{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin:14px 0 4px}
+.totp-qr{flex-shrink:0;line-height:0;padding:10px;background:#fff;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:var(--shadow-sm)}
+.totp-qr svg{display:block;width:180px;height:180px}
+.totp-manual{flex:1;min-width:200px}
+.totp-manual small{display:block;color:var(--text-2);line-height:1.6;margin-bottom:8px}
+.totp-manual code{display:block;padding:10px 12px;border:1px solid var(--line-2);border-radius:var(--r-xs);
+  background:var(--inset);font-size:12px;word-break:break-all;letter-spacing:.06em;color:var(--accent)}
