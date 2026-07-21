@@ -43,7 +43,7 @@ function open(payload, encodedKey) {
 function runtimeRoutes(nodes) {
   return nodes.map(node=>({
     id:node.id,alias:node.alias,name:node.name,enabled:node.enabled,upstreams:node.upstreams,playbackUpstreams:node.playbackUpstreams,
-    allowPrivate:node.allowPrivate,tlsVerify:node.tlsVerify,directStream:node.directStream,showOnHome:node.showOnHome,
+    allowPrivate:node.allowPrivate,tlsVerify:node.tlsVerify,showOnHome:node.showOnHome,
     clientProfile:node.clientProfile,speedLimitMbps:node.speedLimitMbps,monthlyQuotaGB:node.monthlyQuotaGB,
     accessMode:node.access.mode,
     ...(node.access.mode==='key'?{authVersion:node.access.algorithm,routeAuthKey:node.access.routeAuthKey,keyDigest:node.access.digest}:{})

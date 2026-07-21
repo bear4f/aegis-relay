@@ -10,7 +10,7 @@ import { Store } from '../src/store.js';
 
 function route(name='Original') {
   const routeAuthKey=newRouteAuthKey(),accessKey='existing-client-key';
-  return {id:'node-1',alias:'charity',name,enabled:true,upstreams:['https://emby.example.com'],playbackUpstreams:[],allowPrivate:false,tlsVerify:true,directStream:false,showOnHome:false,clientProfile:{enabled:false},speedLimitMbps:0,monthlyQuotaGB:0,accessMode:'key',accessKey,authVersion:ROUTE_AUTH_VERSION,routeAuthKey,keyDigest:routeTokenDigest(accessKey,routeAuthKey)};
+  return {id:'node-1',alias:'charity',name,enabled:true,upstreams:['https://emby.example.com'],playbackUpstreams:[],allowPrivate:false,tlsVerify:true,showOnHome:false,clientProfile:{enabled:false},speedLimitMbps:0,monthlyQuotaGB:0,accessMode:'key',accessKey,authVersion:ROUTE_AUTH_VERSION,routeAuthKey,keyDigest:routeTokenDigest(accessKey,routeAuthKey)};
 }
 
 test('local agent completes register, pull, verify, atomic apply and ACK', () => {

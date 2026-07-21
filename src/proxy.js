@@ -1,14 +1,15 @@
 import http from 'node:http';
 import https from 'node:https';
+import crypto from 'node:crypto';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
-import { verifyRouteToken } from './route-auth.js';
+import { isRouteAuthKey, verifyRouteToken } from './route-auth.js';
 import { ThrottleTransform } from './metrics.js';
 import { guardedLookup } from './lookup.js';
 
 const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
 const RETRY_STATUS = new Set([502, 503, 504]);
-const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 const runtime = new Map();
 let roundRobin = 0;
 
@@ -140,6 +141,46 @@ function externalRedirectPath(location, base) {
   return null;
 }
 
+function redirectSecret(route, appKey) {
+  if(isRouteAuthKey(route.routeAuthKey))return Buffer.from(route.routeAuthKey,'base64url');
+  if(Buffer.isBuffer(appKey)&&appKey.length===32)return appKey;
+  throw new Error('redirect relay key unavailable');
+}
+
+function redirectAad(route) {
+  return Buffer.from(`AegisRelay:redirect:v1:${route.id||route.alias}`,'utf8');
+}
+
+function sealRedirectTarget(route, target, appKey, playback) {
+  const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',redirectSecret(route,appKey),iv);
+  cipher.setAAD(redirectAad(route));
+  const encrypted=Buffer.concat([cipher.update(JSON.stringify({target:target.href,playback:playback===true}),'utf8'),cipher.final()]);
+  return Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString('base64url');
+}
+
+function openRedirectTarget(route, token, appKey) {
+  const payload=Buffer.from(String(token||''),'base64url');
+  if(payload.length<29||payload.toString('base64url')!==token)throw new Error('invalid redirect relay token');
+  const decipher=crypto.createDecipheriv('aes-256-gcm',redirectSecret(route,appKey),payload.subarray(0,12));
+  decipher.setAAD(redirectAad(route));decipher.setAuthTag(payload.subarray(12,28));
+  const decoded=JSON.parse(Buffer.concat([decipher.update(payload.subarray(28)),decipher.final()]).toString('utf8'));
+  const target=new URL(decoded.target);
+  if(!['http:','https:'].includes(target.protocol)||target.username||target.password)throw new Error('invalid redirect relay target');
+  return {target,playback:decoded.playback===true};
+}
+
+function continuationTarget(found, appKey) {
+  const parts=found.rest.split('/').filter(Boolean);
+  if(parts[0]!==RELAY_REDIRECT_SEGMENT)return null;
+  if(parts.length!==2)throw new Error('invalid redirect relay path');
+  return openRedirectTarget(found.route,parts[1],appKey);
+}
+
+function publicRelayLocation(found, target, context, appKey, playback) {
+  const token=sealRedirectTarget(found.route,target,appKey,playback),path=`${found.prefix}/${RELAY_REDIRECT_SEGMENT}/${token}`;
+  return context.host?`${context.proto}://${context.host}${path}${target.hash}`:`${path}${target.hash}`;
+}
+
 function publicRequestContext(req) {
   const host=String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim();
   const forwarded=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim().toLowerCase();
@@ -161,7 +202,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     }
     const found=routeFor(req,routesFrom(routeSource),key);
     if (!found) { res.writeHead(404,{'cache-control':'no-store'}); return res.end('not found'); }
-    const {route}=found, playback=isPlaybackPath(found.rest), configured=orderedTargets(route,playback);
+    let continuation;
+    try { continuation=continuationTarget(found,key); }
+    catch { res.writeHead(404,{'cache-control':'no-store'});return res.end('not found'); }
+    const {route}=found, playback=continuation?.playback===true||isPlaybackPath(found.rest), configured=continuation?[continuation.target.href]:orderedTargets(route,playback);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
@@ -175,11 +219,12 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     applyClientProfile(originalHeaders,route.clientProfile);
     const canRetry=safeMethod(req.method); let finished=false;
 
-    const attempt=(targetValue,index,redirects=0,redirectFrom=null)=>{
+    const routeOrigins=new Set([...normalizedUpstreams(route),...normalizedUpstreams(route,true)].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
+    const attempt=(targetValue,index)=>{
       if (finished) return;
-      const target=redirectFrom || joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
+      const target=continuation&&index===0?continuation.target:joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
-      if (target.origin!==base.origin) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
+      if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
       const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate)};
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
@@ -187,20 +232,18 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         clearTimeout(connectTimer);
         const status=upRes.statusCode||502;
         if (canRetry && RETRY_STATUS.has(status) && index+1<configured.length) { markFailure(route,targetValue,`HTTP ${status}`); upRes.resume(); return attempt(configured[index+1],index+1); }
-        if (canRetry && !route.directStream && REDIRECT_STATUS.has(status) && upRes.headers.location && redirects<5) {
-          let next; try { next=new URL(upRes.headers.location,target); } catch { next=null; }
-          if (next && ['http:','https:'].includes(next.protocol)) { upRes.resume(); markSuccess(route,targetValue); return attempt(targetValue,index,redirects+1,next); }
-        }
         if(RETRY_STATUS.has(status))markFailure(route,targetValue,`HTTP ${status}`);else markSuccess(route,targetValue); const out=cleanResponseHeaders(upRes.headers);
         if (out.location) {
           try {
             const loc=new URL(out.location,target);
             if(!['http:','https:'].includes(loc.protocol)||loc.username||loc.password)delete out.location;
-            else if(loc.origin===base.origin){
+            else if(!continuation&&loc.origin===base.origin){
               const redirectedPath=externalRedirectPath(loc,base);
-              // Emit an ABSOLUTE Location back through this gateway — several Emby clients reject relative ones.
-              out.location=redirectedPath===null?loc.href:(publicContext.host?`${publicContext.proto}://${publicContext.host}${found.prefix}${redirectedPath}${loc.search}${loc.hash}`:`${found.prefix}${redirectedPath}${loc.search}${loc.hash}`);
+              // Keep ordinary login/navigation redirects readable. A redirect outside the configured
+              // upstream base is wrapped below so the client must return through this relay.
+              out.location=redirectedPath===null?publicRelayLocation(found,loc,publicContext,key,playback):(publicContext.host?`${publicContext.proto}://${publicContext.host}${found.prefix}${redirectedPath}${loc.search}${loc.hash}`:`${found.prefix}${redirectedPath}${loc.search}${loc.hash}`);
             }
+            else out.location=publicRelayLocation(found,loc,publicContext,key,playback);
           }
           catch { delete out.location; }
         }

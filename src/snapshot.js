@@ -52,7 +52,7 @@ function normalizeNode(route) {
     id,alias,name:String(route.name||alias),enabled:route.enabled!==false,
     upstreams,
     playbackUpstreams:stringArray(route.playbackUpstreams||[],'playbackUpstreams'),
-    allowPrivate:route.allowPrivate===true,tlsVerify:route.tlsVerify!==false,directStream:route.directStream===true,
+    allowPrivate:route.allowPrivate===true,tlsVerify:route.tlsVerify!==false,
     showOnHome:route.showOnHome===true,clientProfile:clientProfile(route.clientProfile),
     speedLimitMbps:Number(route.speedLimitMbps||0),monthlyQuotaGB:Number(route.monthlyQuotaGB||0),access
   };

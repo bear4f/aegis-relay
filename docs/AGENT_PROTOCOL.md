@@ -92,7 +92,7 @@ Agent 负责：
 - 主动注册、心跳和长轮询；
 - 验证控制面签名；
 - 解密、验证并原子应用配置；
-- 运行现有代理、播放、302、故障转移、限速和本地配额逻辑；
+- 运行现有代理、播放流量接管、故障转移、限速和本地配额逻辑；
 - 保存当前和上一份有效快照；
 - 批量上报不含敏感 URL 的指标；
 - 控制面不可用时继续服务。
@@ -395,7 +395,7 @@ Agent
 - 播放上游；
 - 私网回源；
 - TLS 验证；
-- 302 策略；
+- 播放流量接管；
 - 限速和单机配额；
 - 客户端兼容请求头。
 
@@ -419,7 +419,6 @@ Agent
       "playbackUpstreams": [],
       "allowPrivate": false,
       "tlsVerify": true,
-      "directStream": false,
       "showOnHome": false,
       "clientProfile": {"enabled": false},
       "speedLimitMbps": 0,

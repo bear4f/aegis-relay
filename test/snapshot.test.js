@@ -10,7 +10,7 @@ import { Store } from '../src/store.js';
 
 function keyedNode(id='node-b',name='Charity') {
   const routeAuthKey=newRouteAuthKey();
-  return {id,alias:id,name,enabled:true,upstreams:['https://emby.example.com'],playbackUpstreams:[],allowPrivate:false,tlsVerify:true,directStream:false,showOnHome:false,clientProfile:{enabled:false},speedLimitMbps:0,monthlyQuotaGB:0,accessMode:'key',accessKey:'must-not-leak',authVersion:ROUTE_AUTH_VERSION,routeAuthKey,keyDigest:routeTokenDigest('must-not-leak',routeAuthKey)};
+  return {id,alias:id,name,enabled:true,upstreams:['https://emby.example.com'],playbackUpstreams:[],allowPrivate:false,tlsVerify:true,showOnHome:false,clientProfile:{enabled:false},speedLimitMbps:0,monthlyQuotaGB:0,accessMode:'key',accessKey:'must-not-leak',authVersion:ROUTE_AUTH_VERSION,routeAuthKey,keyDigest:routeTokenDigest('must-not-leak',routeAuthKey)};
 }
 
 test('unchanged normalized configuration reuses revision, hash and signature exactly', () => {
