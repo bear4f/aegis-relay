@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from '../src/route-auth.js';
 import { deriveKey } from '../src/security.js';
-import { compileDesiredSnapshot, ensurePanelSigningIdentity, generatePanelSigningIdentity, verifySnapshot } from '../src/snapshot.js';
+import { compileAgentDesiredSnapshot, compileDesiredSnapshot, ensurePanelSigningIdentity, generatePanelSigningIdentity, verifySnapshot } from '../src/snapshot.js';
 import { Store } from '../src/store.js';
 
 function keyedNode(id='node-b',name='Charity') {
@@ -69,4 +69,11 @@ test('panel signing identity is generated once and remains encrypted in the stor
     const second=ensurePanelSigningIdentity(new Store(file,deriveKey('s'.repeat(32))));
     assert.deepEqual(second,first);
   } finally { fs.rmSync(dir,{recursive:true}); }
+});
+
+test('agent snapshots contain only routes selected for that machine', () => {
+  const identity=generatePanelSigningIdentity(),first=keyedNode('one'),second=keyedNode('two');
+  const data={routes:[first,second],deployments:[{agentId:'agent-a',routeId:'two',enabled:true}]};
+  const compiled=compileAgentDesiredSnapshot({data,agentId:'agent-a',signingIdentity:identity});
+  assert.deepEqual(compiled.snapshot.nodes.map(node=>node.id),['two']);
 });

@@ -5,9 +5,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { clientCredentials } from '../src/credentials.js';
-import { LEGACY_ROUTE_AUTH_VERSION, ROUTE_AUTH_VERSION, verifyRouteToken } from '../src/route-auth.js';
+import { LEGACY_ROUTE_AUTH_VERSION, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest, verifyRouteToken } from '../src/route-auth.js';
 import { deriveKey, tokenDigest } from '../src/security.js';
 import { migrationBackupPath, restoreMigrationBackup, STORE_SCHEMA_VERSION, Store } from '../src/store.js';
+import { routesForAgent } from '../src/agent-registry.js';
+import { compileDesiredSnapshot, generatePanelSigningIdentity } from '../src/snapshot.js';
 
 function writeEncrypted(file, key, data) {
   const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',key,iv);
@@ -51,6 +53,8 @@ test('schema v1 route authentication migrates atomically without changing the cl
 
     const store=new Store(file,key),route=store.data.routes[0];
     assert.equal(store.data.schemaVersion,STORE_SCHEMA_VERSION);
+    assert.deepEqual(store.data.agents.map(agent=>agent.id),['local']);
+    assert.deepEqual(store.data.deployments.map(item=>[item.agentId,item.routeId]),[['local','node-1']]);
     assert.equal(route.authVersion,ROUTE_AUTH_VERSION);
     assert.equal(route.accessKey,accessKey);
     assert.equal(clientCredentials(route,route.accessKey).clientPath,beforePath);
@@ -84,5 +88,20 @@ test('digest-only legacy routes stay usable locally and require rotation before 
     assert.equal(route.routeAuthKey,undefined);
     assert.equal(verifyRouteToken(route,accessKey,key),true);
     assert.equal(verifyRouteToken(route,accessKey),false);
+  } finally { fs.rmSync(dir,{recursive:true}); }
+});
+
+test('schema v2 deployment migration keeps the local snapshot byte-for-byte stable', () => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aegis-deployment-migration-')),file=path.join(dir,'aegis.enc.json');
+  try {
+    const key=deriveKey('d'.repeat(32)),identity=generatePanelSigningIdentity(),accessKey='stable-client-key',routeAuthKey=newRouteAuthKey();
+    const route={id:'stable',alias:'stable',name:'Stable',enabled:true,upstreams:['https://emby.example.com'],playbackUpstreams:[],allowPrivate:false,tlsVerify:true,showOnHome:false,clientProfile:{enabled:false},speedLimitMbps:0,monthlyQuotaGB:0,accessMode:'key',accessKey,authVersion:ROUTE_AUTH_VERSION,routeAuthKey,keyDigest:routeTokenDigest(accessKey,routeAuthKey)};
+    const original={version:1,schemaVersion:2,admin:null,routes:[route],audit:[],sessions:{},controlPlane:{panelSigningIdentity:identity}};
+    const before=compileDesiredSnapshot({nodes:original.routes,signingIdentity:identity});
+    writeEncrypted(file,key,original);
+    const store=new Store(file,key),after=compileDesiredSnapshot({nodes:routesForAgent(store.data,'local'),signingIdentity:identity});
+    assert.equal(store.data.schemaVersion,3);
+    assert.deepEqual(after,before);
+    assert.equal(fs.existsSync(migrationBackupPath(file,2)),true);
   } finally { fs.rmSync(dir,{recursive:true}); }
 });

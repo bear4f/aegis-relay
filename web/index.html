@@ -54,7 +54,7 @@
 
       <section id="nodes-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ROUTE DIRECTORY</span><h2>节点管理</h2><p>创建客户端地址，并管理备用线路、播放线路和流量策略。</p></div><div class="inline-actions"><button id="export-btn" class="btn ghost">导出配置</button><button id="import-btn" class="btn ghost">批量导入</button><button class="btn primary add-node"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点</button></div></div><div id="node-grid" class="node-grid"></div></section>
 
-      <section id="agents-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">DATA PLANE</span><h2>代理机器</h2><p>本机已经作为第一个 Agent 运行；后续远程机器也会在这里统一管理。</p></div></div><div id="agent-grid" class="node-grid"></div></section>
+      <section id="agents-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">DATA PLANE</span><h2>代理机器</h2><p>为每台机器设置独立域名，并选择需要部署的 Emby 节点；失联机器会保留，直到管理员手动删除。</p></div></div><div id="agent-grid" class="node-grid"></div></section>
 
       <section id="traffic-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">BANDWIDTH CONTROL</span><h2>流量统计</h2><p>按节点查看请求、播放流量、月度配额与限速策略。</p></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>节点</th><th>请求</th><th>播放请求</th><th>总流量</th><th>本月流量 / 配额</th><th>限速</th><th>错误</th></tr></thead><tbody id="traffic-table"></tbody></table></div></article></section>
 

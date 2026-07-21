@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { canonicalJson } from './canonical-json.js';
 import { isRouteAuthKey, ROUTE_AUTH_VERSION } from './route-auth.js';
 import { b64u, timingEqual } from './security.js';
+import { routesForAgent } from './agent-registry.js';
 
 export const SNAPSHOT_SCHEMA_VERSION=1;
 
@@ -127,6 +128,12 @@ export function compileDesiredSnapshot({nodes,previousState=null,signingIdentity
   if(revision<1)throw new Error('the first snapshot must use revision 1');
   const snapshot=compileNormalizedSnapshot({revision,nodes:normalized,signingIdentity});
   return {snapshot,state:Object.freeze({revision,contentHash,snapshotHash:snapshot.hash,keyId:signingIdentity.keyId})};
+}
+
+export function compileAgentDesiredSnapshot({data,agentId,previousState=null,signingIdentity}) {
+  if(!data||typeof data!=='object')throw new Error('agent snapshot requires store data');
+  if(!String(agentId||'').trim())throw new Error('agent snapshot requires agentId');
+  return compileDesiredSnapshot({nodes:routesForAgent(data,agentId),previousState,signingIdentity});
 }
 
 export function verifySnapshot(snapshot, signingIdentity, {currentRevision=0,currentHash=null}={}) {

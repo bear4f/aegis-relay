@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { LEGACY_ROUTE_AUTH_VERSION, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from './route-auth.js';
+import { ensureAgentRegistry } from './agent-registry.js';
 
-export const STORE_SCHEMA_VERSION = 2;
-const EMPTY = { version: 1, schemaVersion: STORE_SCHEMA_VERSION, admin: null, routes: [], audit: [], sessions: {} };
+export const STORE_SCHEMA_VERSION = 3;
+const EMPTY = { version: 1, schemaVersion: STORE_SCHEMA_VERSION, admin: null, routes: [], agents: [], deployments: [], audit: [], sessions: {} };
 
-export function migrationBackupPath(file) {
-  return `${file}.schema-v1.bak`;
+export function migrationBackupPath(file, sourceVersion=1) {
+  return `${file}.schema-v${sourceVersion}.bak`;
 }
 
 function fsyncFile(file) {
@@ -53,37 +54,41 @@ export function migrateRouteAuthData(input) {
   const sourceVersion = Number(input?.schemaVersion || 1);
   if (!Number.isInteger(sourceVersion) || sourceVersion < 1) throw new Error('invalid store schemaVersion');
   if (sourceVersion > STORE_SCHEMA_VERSION) throw new Error(`store schemaVersion ${sourceVersion} is newer than supported ${STORE_SCHEMA_VERSION}`);
-  if (sourceVersion === STORE_SCHEMA_VERSION) return { data:input, changed:false, sourceVersion, migrated:0, legacy:0 };
+  if (sourceVersion === STORE_SCHEMA_VERSION) return { data:input, changed:false, sourceVersion, migrated:0, legacy:0, agents:0, deployments:0 };
 
   const data = structuredClone(input);
   let migrated = 0, legacy = 0;
-  for (const route of Array.isArray(data.routes) ? data.routes : []) {
-    if ((route.accessMode || 'key') === 'alias_only') continue;
-    if (route.accessKey) {
-      const routeAuthKey = newRouteAuthKey();
-      route.routeAuthKey = routeAuthKey;
-      route.authVersion = ROUTE_AUTH_VERSION;
-      route.keyDigest = routeTokenDigest(route.accessKey, routeAuthKey);
-      delete route.authMigrationRequired;
-      migrated++;
-    } else if (route.keyDigest) {
-      route.authVersion = LEGACY_ROUTE_AUTH_VERSION;
-      route.authMigrationRequired = true;
-      delete route.routeAuthKey;
-      legacy++;
-    } else {
-      route.routeAuthKey = newRouteAuthKey();
-      route.authVersion = ROUTE_AUTH_VERSION;
-      route.authMigrationRequired = true;
-      legacy++;
+  if(sourceVersion<2){
+    for (const route of Array.isArray(data.routes) ? data.routes : []) {
+      if ((route.accessMode || 'key') === 'alias_only') continue;
+      if (route.accessKey) {
+        const routeAuthKey = newRouteAuthKey();
+        route.routeAuthKey = routeAuthKey;
+        route.authVersion = ROUTE_AUTH_VERSION;
+        route.keyDigest = routeTokenDigest(route.accessKey, routeAuthKey);
+        delete route.authMigrationRequired;
+        migrated++;
+      } else if (route.keyDigest) {
+        route.authVersion = LEGACY_ROUTE_AUTH_VERSION;
+        route.authMigrationRequired = true;
+        delete route.routeAuthKey;
+        legacy++;
+      } else {
+        route.routeAuthKey = newRouteAuthKey();
+        route.authVersion = ROUTE_AUTH_VERSION;
+        route.authMigrationRequired = true;
+        legacy++;
+      }
     }
   }
+  const beforeAgents=Array.isArray(data.agents)?data.agents.length:0,beforeDeployments=Array.isArray(data.deployments)?data.deployments.length:0;
+  ensureAgentRegistry(data,new Date().toISOString(),{deployAllLocal:true});
   data.schemaVersion = STORE_SCHEMA_VERSION;
-  return { data, changed:true, sourceVersion, migrated, legacy };
+  return { data, changed:true, sourceVersion, migrated, legacy, agents:data.agents.length-beforeAgents, deployments:data.deployments.length-beforeDeployments };
 }
 
-export function restoreMigrationBackup(file, key) {
-  const backup = migrationBackupPath(file);
+export function restoreMigrationBackup(file, key, sourceVersion=1) {
+  const backup = migrationBackupPath(file,sourceVersion);
   if (!fs.existsSync(backup)) throw new Error(`migration backup not found: ${backup}`);
   const payload = fs.readFileSync(backup, 'utf8');
   decryptStore(payload, key);
@@ -101,7 +106,7 @@ export class Store {
     const result = migrateRouteAuthData(this.data);
     if (!result.changed) return result;
     if (fs.existsSync(this.file)) {
-      const backup = migrationBackupPath(this.file);
+      const backup = migrationBackupPath(this.file,result.sourceVersion);
       try {
         fs.copyFileSync(this.file, backup, fs.constants.COPYFILE_EXCL);
         fs.chmodSync(backup, 0o600);
@@ -114,10 +119,11 @@ export class Store {
     }
     this.data = result.data;
     this.data.audit = Array.isArray(this.data.audit) ? this.data.audit : [];
-    this.data.audit.unshift({ at:new Date().toISOString(), action:'store.schema_migrated', ip:'local', detail:`schema ${result.sourceVersion} -> ${STORE_SCHEMA_VERSION}; ${result.migrated} routes migrated; ${result.legacy} require rotation` });
+    this.data.audit.unshift({ at:new Date().toISOString(), action:'store.schema_migrated', ip:'local', detail:`schema ${result.sourceVersion} -> ${STORE_SCHEMA_VERSION}; ${result.migrated} routes migrated; ${result.legacy} require rotation; ${result.agents} agents and ${result.deployments} deployments added` });
     this.data.audit = this.data.audit.slice(0, 500);
     this.save();
-    return { ...result, backup:fs.existsSync(migrationBackupPath(this.file)) ? migrationBackupPath(this.file) : null };
+    const backup=migrationBackupPath(this.file,result.sourceVersion);
+    return { ...result, backup:fs.existsSync(backup) ? backup : null };
   }
   save() {
     const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv);

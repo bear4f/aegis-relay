@@ -24,6 +24,7 @@ test('local agent completes register, pull, verify, atomic apply and ACK', () =>
     assert.equal(store.data.controlPlane.localAgent.transport,'loopback');
     assert.equal(store.data.controlPlane.localAgent.pinnedPanelKeyId,store.data.controlPlane.panelSigningIdentity.keyId);
     assert.equal(store.data.controlPlane.localAgent.lastAck.status,'applied');
+    assert.deepEqual(agent.status().routeIds,['node-1']);
     assert.equal(firstRoutes[0].accessKey,undefined);
     assert.equal(firstRoutes[0].name,'Original');
     const raw=fs.readFileSync(cache,'utf8');
@@ -44,6 +45,12 @@ test('local agent completes register, pull, verify, atomic apply and ACK', () =>
     assert.equal(agent.reconcile().decision,'noop');
     assert.equal(agent.status().appliedRevision,2);
 
+    store.data.deployments=[];store.save();
+    const deselected=agent.reconcile();
+    assert.equal(deselected.ok,true);
+    assert.equal(agent.routeSource.getRoutes().length,0);
+    assert.deepEqual(agent.status().routeIds,[]);
+
     const snapshot=agent.pull(store.data.routes),tampered=structuredClone(snapshot);tampered.nodes[0].name='Attacker';
     const activeBefore=agent.routeSource.getRoutes();
     assert.throws(()=>agent.apply(tampered),/hash mismatch/);
@@ -51,7 +58,7 @@ test('local agent completes register, pull, verify, atomic apply and ACK', () =>
 
     const restartedStore=new Store(file,key),restarted=new LocalAgent({store:restartedStore,cacheFile:cache});
     assert.equal(restarted.start().decision,'noop');
-    assert.equal(restarted.routeSource.getRoutes()[0].name,'Changed');
+    assert.equal(restarted.routeSource.getRoutes().length,0);
     assert.equal(restarted.status().inSync,true);
   } finally { fs.rmSync(dir,{recursive:true}); }
 });

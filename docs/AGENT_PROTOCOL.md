@@ -8,7 +8,7 @@
 
 Phase 1 已落地：
 
-- Store schema v1 会在启动时原子迁移到 schema v2，并在同目录保留加密备份 `aegis.enc.json.schema-v1.bak`；
+- Store schema v1/v2 会在启动时原子迁移到 schema v3，并在同目录保留对应旧版本的加密备份；
 - 可恢复的老节点保持原访问密码和客户端路径不变，改用独立 256 位 `routeAuthKey`；
 - 只剩旧摘要、无法恢复密码的节点继续由本机兼容数据面服务，并在管理员轮换密码前禁止进入 Agent 快照；
 - 快照使用固定 canonical JSON、单调 revision、SHA-256 hash 和 Ed25519 签名；内容未变化时不会制造新 revision；
@@ -16,7 +16,14 @@ Phase 1 已落地：
 - 本地 Agent 当前/上一份快照使用独立存储密钥 AES-256-GCM 加密，控制面配置失败不会覆盖当前有效运行时；
 - 代理运行时通过原子只读配置指针取路由，配置切换不会修改正在播放请求所持有的旧对象。
 
-Phase 2 远程注册、签名 HTTPS 长轮询和远程 Agent 安装仍未实现，本文对应章节继续作为其约束。
+Phase 2 数据骨架已落地：
+
+- Store schema v3 新增独立的 Agent 注册表和 `Deployment（Route × Agent）` 关系；
+- 升级时会为所有现有节点自动创建本地 Deployment，本地签名快照的内容、hash 和 signature 保持不变；
+- 快照编译器可以按 Agent 只选择已部署节点；
+- 面板可以修改机器域名和节点选择，远程机器失联后会保留，只有管理员确认后才从面板删除。
+
+Phase 2 的远程注册、签名 HTTPS 长轮询、自动显示和远程 Agent 安装/卸载仍未实现，本文对应章节继续作为其约束。
 
 ## 1. 目的
 
