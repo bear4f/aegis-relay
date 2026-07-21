@@ -1,55 +1,68 @@
 # AegisRelay
 
-AegisRelay 是一个原创的、隐私优先的 Emby 多服务器反向代理管理面板。它把冗长的上游地址收敛为短别名，例如：
+[![CI](https://github.com/bear4f/aegis-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/bear4f/aegis-relay/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/Node-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+隐私优先的 **Emby 多服务器反向代理管理面板**。把一堆冗长的上游地址收敛成短别名，并可分发到多台代理机器：
 
 ```text
-https://relay.example.com/r/home/<独立访问密钥>/
-https://relay.example.com/r/family/<独立访问密钥>/
+https://emby.example.com/charity/<访问密钥>/
+https://emby.example.com/family/<访问密钥>/
 ```
 
-上游域名、端口和协议不会出现在客户端地址中。管理员登录后可以随时查看和复制完整客户端地址；连接密码与其他配置一起保存在 AES-256-GCM 加密的数据文件中，代理校验仍使用 HMAC 摘要。
+上游域名、端口和协议**不会出现在客户端地址里**。零第三方运行时依赖，只用 Node.js 标准库 + AES-256-GCM 加密存储。
 
-> 当前为安全预览版 `0.8.0`。首次部署建议先在测试域名验证，再承载正式节点。
+---
 
-AegisRelay 采用独立的 Node.js 标准库实现、加密 JSON 存储、分离的管理/代理监听器以及 capability URL 模型。
+## 解决什么问题
 
-## 节点管理能力
+手里有多个公益服 / 机场服 / 自建服时，通常会遇到：
 
-- **短路径节点**：客户端使用 `/charity/<访问密钥>/`；旧版 `/r/charity/<访问密钥>/` 继续兼容。
-- **可选连接密码**：默认启用独立随机密码；管理员可随时查看完整客户端地址，也可显式改为公开短路径访问。
-- **多主线路**：最多配置 8 条，以分号或换行分隔。安全的 GET/HEAD 请求遇到网络错误或 502/503/504 时自动尝试下一线路；连续失败会指数退避熔断。
-- **前后端分离**：播放线路可独立配置。`Videos`、`Audio`、`LiveTV` 和下载路径会走播放线路，其余 API/元数据走主线路。
-- **播放链路兼容**：保留 `Range` / `If-Range` 与 `206 Partial Content`，向上游传递公网域名和 HTTPS 协议信息，并正确处理 Toolbox 基础路径及 CDN 跳转。
-- **播放流量接管**：所有上游跳转都会改写回带认证的 AegisRelay 地址，客户端后续请求仍经过代理；跨站请求会移除 Cookie、Authorization 和 Emby Token，避免凭据泄漏。
-- **兼容性请求头**：管理员可设置通用 `User-Agent`、`X-Emby-Client`、设备名称和设备 ID，默认关闭且留有审计记录。
-- **节点首页**：每个节点可选择是否在代理首页展示名称；带密钥节点不会公开密钥。
-- **线路诊断**：管理面展示连续失败、熔断状态、重试时间和最近成功时间，不显示真实上游。
-- **全网流量治理**：主代理机和每台探针按节点统计请求、播放请求、上下行流量、错误和活动连接；探针通过签名心跳上报并在本地加密保存统计，支持 Mbps 限速与月度 GB 配额。
-- **完整控制台**：仪表盘、节点卡片、流量趋势、TLS/Emby 版本诊断、安全审计、配置导入导出和 HTTPS 部署状态集中呈现。
-- **多机代理数据面**：玻璃拟态控制台可生成 10 分钟有效的一次性安装指令；远程机器使用 Ed25519/X25519 身份注册、拉取仅属于自己的加密节点快照、原子应用并回传版本，卸载后在面板保持失联，直到管理员删除。
-- **保号提醒**：可配置节点维护周期，通过 Telegram Bot 推送提醒；完成保号后在节点卡片重置周期。
+| 痛点 | AegisRelay 的做法 |
+|---|---|
+| 每个服地址、端口各不相同，换设备要重输一堆 | 统一入口 + 短别名，客户端只记一个域名 |
+| 源站在国内直连困难，家人不会配代理 | 把面板装在直连线路好的中转机上，**客户端零配置**即可观看 |
+| 部分服限制播放器类型 | 按节点配置兼容请求头（UA / Client / 设备名）|
+| 多个服容易忘记保号 | 按节点设置维护周期，Telegram 推送提醒 |
+| 单机带宽和线路有限 | **多机数据面**：注册多台代理机，每台独立域名、各自承载不同节点 |
 
-`0.8.0` 新增控制面/本地数据面双域名：在“代理机器 → 本地 Agent”保存新代理域名后，受限的主机执行器自动生成双域名 Nginx 配置、申请证书、校验并切换；客户端地址自动使用新代理域名。面板域名只保留管理与 Agent 控制接口，旧代理域名和指向同一 IP 的其他域名均不能继续承载 Emby。失败时保留旧配置并在面板显示原因。
+> 兼容请求头只适用于你**拥有或已获明确授权**的上游。本项目不内置第三方客户端冒充模板，也不应用于绕过上游的反代禁令或访问控制。详见 [节点管理说明](docs/NODE_MANAGEMENT.md)。
 
-兼容性请求头只适用于你拥有或已获明确授权的 Emby 上游。AegisRelay 不内置第三方客户端冒充模板，也不应用于绕过上游禁止反代、客户端限制或其他访问控制。详见 [节点管理说明](docs/NODE_MANAGEMENT.md)。
+---
 
-## 安全默认值
+## 核心能力
 
-- curl 安装后的初始化阶段临时公开 `9080`；完成域名向导后自动改为仅监听 `127.0.0.1:9080`。
-- 管理员必须使用至少 14 位密码和 TOTP；提供一次性恢复码。
-- 密码使用高成本 `scrypt`，持久数据使用 AES-256-GCM 整体加密。
-- 登录限速、30 分钟会话、HttpOnly + SameSite=Strict Cookie、CSRF Token。
-- CSP、禁止 iframe、禁止 referrer、关闭缓存和 MIME sniffing。
-- 默认拒绝私网、环回、链路本地和保留地址回源，降低 SSRF 风险。
-- 不接受用户传入的 `X-Forwarded-For`，不把管理 Cookie 转发给上游。
-- 路由访问密钥不会写入应用访问日志，审计日志会脱敏。
-- Docker 默认无 root、只读文件系统、丢弃全部 capabilities、禁止提权。
+**节点与地址**
+- 短路径节点 `/charity/<访问密钥>/`，旧版 `/r/charity/<访问密钥>/` 继续兼容
+- 连接密码**可随时开关**，也可自定义；改动后面板直接给出新的客户端地址
+- 节点列表为密集表格，支持**搜索**、**拖动排序**，地址默认掩码、可就地展开与复制
+- 配置导入导出；可选择是否在网关首页公开展示节点名
 
-详细边界见 [SECURITY.md](SECURITY.md) 与 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)。
+**播放链路**
+- 保留 `Range` / `If-Range` 与 `206 Partial Content`，适配拖动进度条与断点续传
+- **全程代理接管**：上游的跳转会被改写回带认证的 AegisRelay 地址，客户端不会绕过代理直连源站
+- 跨站请求自动移除 Cookie、Authorization 和 Emby Token，避免凭据泄漏
+- 多主线路（最多 8 条）故障转移：安全请求遇到网络错误或 502/503/504 自动切换，连续失败才熔断退避
+- 前后端分离支持：`Videos` / `Audio` / `LiveTV` / 下载走独立播放线路，其余走主线路
+- 面向流媒体调优：上游连接复用、DNS 结果缓存、无限速时零中间缓冲、`TCP_NODELAY`、长空闲窗口（不会掐断慢转码和暂停）
 
-## 一条 curl 完成安装
+**多机数据面**
+- 面板生成 10 分钟有效的**一次性安装指令**，远程机器用 Ed25519/X25519 身份注册
+- 每台机器只拉取**属于自己的加密节点快照**，原子应用后回传版本
+- 每台机器可用**独立域名**；在面板改域名后，受限的主机执行器自动申请证书并切换 Nginx
+- 机器卡片显示在线状态、配置版本、流量占比；**代理程序落后于面板时会标出待升级**并给出更新命令
 
-支持 Debian / Ubuntu。安装器会准备 Docker、下载公开仓库到 `/opt/aegis-relay`、生成独立主密钥、Setup Token 和随机管理路径，然后启动临时初始化入口：
+**运维与安全**
+- 仪表盘、每日流量趋势、按机器流量、TLS/Emby 版本诊断、安全审计
+- 按节点限速（Mbps）与月度配额（GB）
+- 保号提醒（Telegram Bot）
+
+---
+
+## 快速开始
+
+支持 Debian / Ubuntu。安装器会准备 Docker、下载仓库到 `/opt/aegis-relay`、生成独立主密钥、Setup Token 和随机管理路径：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh | sudo sh
@@ -62,98 +75,94 @@ curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/boo
 Setup Token: 一次性随机令牌
 ```
 
-在云防火墙/安全组临时放行 TCP 9080，打开该管理地址，设置强密码并绑定 TOTP。初始化期间不要添加正式节点，不要把 Setup Token 发到聊天或工单。
+在云防火墙临时放行 TCP 9080，打开该地址，设置至少 14 位密码并绑定 TOTP。
 
-### 域名、Nginx 与自动证书
+> 初始化期间不要添加正式节点，不要把 Setup Token 发到聊天或工单。
 
-1. 将域名的 A/AAAA 记录指向服务器。
-2. 安全组放行 TCP 80 和 443。使用 Cloudflare 时，首次签证建议先设为 DNS only。
-3. 完成面板初始化后执行：
+### 域名与自动证书
+
+1. 把域名 A/AAAA 记录指向服务器，放行 TCP 80 / 443（用 Cloudflare 时首次签证建议先设为 DNS only）
+2. 面板初始化完成后执行：
 
 ```bash
 sudo aegis-relay domain panel.example.com admin@example.com
 ```
 
-该命令先完成管理面板的 HTTPS 收口，并保留兼容的单域名代理入口。随后请在“代理机器 → 本地 Agent”填写一个不同的代理域名，面板会自动完成第二张证书及双域名切换。切换完成后：
+3. 随后在「代理机器 → 本地 Agent」填写一个**不同的**代理域名，面板会自动完成第二张证书与双域名切换。
 
-- 安装并配置 Nginx；
-- `panel.example.com` 只提供 2FA 管理面板、Agent 注册和配置同步，不处理 Emby 节点路径；
-- 本地 Agent 中填写的代理域名只提供 Emby 网关和播放流量，不提供管理接口；
-- 通过 Certbot 申请 Let's Encrypt 证书并强制 HTTP 跳转 HTTPS；
-- 启用 `certbot.timer` 自动续期；
-- 证书成功后把 Docker 的管理端口从 `0.0.0.0:9080` 收回为 `127.0.0.1:9080`；
-- 写入 `PUBLIC_BASE_URL` 并启用 Secure Cookie。
+切换完成后职责分离：
 
-最终管理地址：
+| 域名 | 提供 |
+|---|---|
+| `panel.example.com` | 2FA 管理面板、Agent 注册与配置同步 |
+| `emby.example.com` | 仅 Emby 网关与播放流量 |
 
-```text
-https://panel.example.com/
-```
+Nginx 会精确校验请求 Host——旧代理域名和指向同一 IP 的其他子域名返回 421 / 404；站点关闭 access log，避免路径密钥进入日志。证书通过 Certbot 签发并由 `certbot.timer` 自动续期；成功后管理端口从 `0.0.0.0:9080` 收回为 `127.0.0.1:9080`，此时可从安全组删除 9080 规则。
 
-切换后的客户端节点地址（假设本地代理域名是 `emby.example.com`）：
+DNS 或证书失败时不会关闭 9080 临时入口，修复后重跑即可；Nginx 校验失败会自动回滚上一份配置。
 
-```text
-https://emby.example.com/charity/<访问密钥>/
-```
+### 添加远程代理机
 
-此时外网不能再直接访问 `IP:9080`。可从云安全组删除 9080 放行规则。Nginx 站点关闭 access log，避免路径密钥进入日志；同时精确校验请求 Host，只有面板域名可以进入控制面、只有当前本地代理域名可以进入 Emby 数据面。旧代理域名和指向同一 IP 的其他子域名返回 HTTP 421 或 404。
+先在「部署向导」保存**统一证书邮箱**，之后在「代理机器 → 添加机器」填写机器名、已解析到目标机器的域名和要部署的节点，面板会生成一条命令，在目标机器执行即可。
 
-随机管理路径仍保留为兼容入口，但日常无需记忆。可选的公开节点页移动到 `https://panel.example.com/gateway/`。管理员会话保存在同一份 AES-256-GCM 加密数据文件中，因此正常更新不会要求立即重新登录；代理层会剥离管理员会话 Cookie 和 CSRF 头，绝不会把它们发送给 Emby 上游。
+改这台机器的域名时**直接在面板里改**：面板下发目标域名 → 机器写入受限请求 → 主机执行器申请证书并切换 Nginx → 机器回报实际生效域名，面板全程显示进度。
 
-### 运维命令
+---
+
+## 运维命令
+
+主机：
 
 ```bash
-sudo aegis-relay status
-sudo aegis-relay logs
-sudo aegis-relay update
-sudo aegis-relay proxy-domain emby.example.com
-systemctl status certbot.timer
-certbot certificates
+sudo aegis-relay status      # 容器状态
+sudo aegis-relay logs        # 实时日志
+sudo aegis-relay update      # 拉取最新版并重建
+sudo aegis-relay domain panel.example.com admin@example.com
+sudo aegis-relay proxy-domain emby.example.com   # 面板执行器不可用时的手动兜底
 ```
 
-正常情况下直接在面板切换本地代理域名；`proxy-domain` 是 systemd 执行器不可用时的手动恢复命令。升级到 `0.8.0` 后需先运行一次 `sudo aegis-relay update`，安装受限的域名切换执行器。执行器只读取经过严格校验的域名与证书邮箱，只能调用固定的 Nginx/Certbot 脚本，容器本身仍保持非 root、只读文件系统和零 capabilities。
-
-远程代理机使用独立命令：
+每台代理机器：
 
 ```bash
 sudo aegis-relay-agent status
 sudo aegis-relay-agent logs
-sudo aegis-relay-agent update
+sudo aegis-relay-agent update      # 策略更新后每台都要跑
 sudo aegis-relay-agent domain relay.example.com admin@example.com
 sudo aegis-relay-agent uninstall
 ```
 
-添加第一台远程代理机前，先在面板“部署向导”保存统一证书邮箱。以后在“代理机器 → 添加机器”中只需填写机器名称、已解析到目标机器的域名和节点选择；生成的单条命令会自动携带统一邮箱，不需要在每台机器重复输入。
+> **更新策略时，主机和每台代理机都要各自更新**——数据面代码是共用的，但每台机器各自构建镜像。面板会把落后的机器标为「待升级」，照着提示逐台执行即可。
 
-从 `0.5.0` 升级远程代理机时，旧管理命令还没有 `update` 子命令，可执行一次兼容升级：
+---
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh | sudo sh
-```
+## 安全默认值
 
-该升级会保留原 Agent 身份和注册关系，不需要在面板删除机器或重新插针。升级后通常在 15 秒内完成配置同步；卡片应显示相同的目标/已应用 revision，并进入“代理运行中”。
+- 管理员必须使用至少 14 位密码 + TOTP，并提供一次性恢复码
+- 密码用高成本 `scrypt`，持久数据整体 AES-256-GCM 加密
+- 登录限速、30 分钟会话、HttpOnly + SameSite=Strict Cookie、CSRF Token
+- CSP、禁止 iframe、禁止 referrer、关闭缓存与 MIME sniffing
+- 默认拒绝私网、环回、链路本地和保留地址回源，降低 SSRF 风险
+- 不接受用户传入的 `X-Forwarded-For`，不把管理 Cookie / CSRF 头转发给上游
+- 访问密钥不写入访问日志，审计日志自动脱敏
+- Agent 请求使用 Ed25519 签名 + nonce 防重放；面板响应同样签名
+- 容器非 root、只读文件系统、丢弃全部 capabilities、禁止提权
 
-如果 DNS 或证书申请失败，脚本不会关闭 9080 临时入口；修复后重新执行 `aegis-relay domain`。Nginx 配置校验失败会自动恢复上一份站点配置。
+边界说明见 [SECURITY.md](SECURITY.md)、[威胁模型](docs/THREAT_MODEL.md) 与 [Agent 协议](docs/AGENT_PROTOCOL.md)。
 
-### 数据目录权限修复
-
-若旧版本首次创建管理员时出现 `EACCES: permission denied, open '/app/data/...'`，重新执行安装命令即可。安装器会保留 `.env` 和加密数据，并将数据目录修正为固定的非 root 运行用户：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh | sudo sh
-```
+---
 
 ## 使用流程
 
-1. 用 Setup Token 初始化管理员，立即保存 TOTP Secret 和恢复码。
-2. 登录后填写显示名称、短别名和上游地址。
-3. 一般保持默认的“连接密码开启”和“由本机中转”即可；前后端分离、私网回源等选项位于高级设置。
-4. 创建后点击节点卡片的“查看地址”，复制完整 HTTPS 地址到 Emby 客户端。
-5. 怀疑泄露时点击“更换密码”；旧地址立即失效。
+1. 用 Setup Token 初始化管理员，**立即离线保存** TOTP Secret 和恢复码
+2. 填写显示名称、短别名和上游地址（前后端分离、私网回源等在高级设置里）
+3. 在节点表格的「客户端地址」列点眼睛展开、点「复制」，粘贴到 Emby 客户端
+4. 怀疑泄露时点「密码」更换，旧地址立即失效；也可整体关闭连接密码
 
 详细安装说明见 [部署手册](docs/DEPLOYMENT.md)。
 
-## 本地开发与验证
+---
+
+## 开发与备份
 
 只依赖 Node.js 20+，无第三方运行时包：
 
@@ -162,9 +171,7 @@ npm run check
 npm test
 ```
 
-## 备份
-
-一致备份必须同时包含 `data/aegis.enc.json` 和 `.env` 中的 `APP_MASTER_KEY`，二者应分开加密保存。丢失主密钥无法恢复；泄露主密钥与数据文件则等同于数据泄露。
+一致备份必须**同时**包含 `data/aegis.enc.json` 和 `.env` 里的 `APP_MASTER_KEY`，且二者分开加密保存。丢失主密钥无法恢复；同时泄露主密钥与数据文件等同于数据泄露。
 
 ## License
 
