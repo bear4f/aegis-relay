@@ -28,6 +28,7 @@
       <nav>
         <button data-page="dashboard" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>仪表盘</button>
         <button data-page="nodes"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><circle cx="7" cy="7" r="1"/><circle cx="7" cy="17" r="1"/></svg>节点管理</button>
+        <button data-page="agents"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M12 7v4M6.7 16.8l3.8-4M17.3 16.8l-3.8-4"/></svg>代理机器</button>
         <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>流量统计</button>
         <button data-page="diagnostics"><svg viewBox="0 0 24 24"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>故障诊断</button>
         <button data-page="audit"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>安全审计</button>
@@ -52,6 +53,8 @@
       </section>
 
       <section id="nodes-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ROUTE DIRECTORY</span><h2>节点管理</h2><p>创建客户端地址，并管理备用线路、播放方式和流量策略。</p></div><div class="inline-actions"><button id="export-btn" class="btn ghost">导出配置</button><button id="import-btn" class="btn ghost">批量导入</button><button class="btn primary add-node"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点</button></div></div><div id="node-grid" class="node-grid"></div></section>
+
+      <section id="agents-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">DATA PLANE</span><h2>代理机器</h2><p>本机已经作为第一个 Agent 运行；后续远程机器也会在这里统一管理。</p></div></div><div id="agent-grid" class="node-grid"></div></section>
 
       <section id="traffic-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">BANDWIDTH CONTROL</span><h2>流量统计</h2><p>按节点查看请求、播放流量、月度配额与限速策略。</p></div></div><article class="panel table-panel"><div class="table-wrap"><table><thead><tr><th>节点</th><th>请求</th><th>播放请求</th><th>总流量</th><th>本月流量 / 配额</th><th>限速</th><th>错误</th></tr></thead><tbody id="traffic-table"></tbody></table></div></article></section>
 

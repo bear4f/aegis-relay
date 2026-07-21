@@ -15,6 +15,7 @@ let roundRobin = 0;
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
 const safeMethod = method => method === 'GET' || method === 'HEAD';
 const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const routesFrom = source => typeof source?.getRoutes==='function'?source.getRoutes():source?.data?.routes||[];
 
 export function stripAdminCredentials(headers) {
   delete headers['x-csrf-token'];
@@ -151,14 +152,14 @@ function cleanResponseHeaders(input) {
   stripAdminSetCookies(out);out['referrer-policy']='no-referrer'; out['x-content-type-options']='nosniff'; return out;
 }
 
-export function makeProxyHandler(store, key, metrics = null) {
+export function makeProxyHandler(routeSource, key, metrics = null) {
   return async (req, res) => {
     const incoming=new URL(req.url,'http://relay.invalid');
     if (req.method==='GET' && (incoming.pathname==='/' || incoming.pathname==='/index.html' || incoming.pathname==='/gateway' || incoming.pathname==='/gateway/')) {
       res.writeHead(200, { 'content-type':'text/html; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-frame-options':'DENY','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" });
-      return res.end(publicIndex(store.data.routes));
+      return res.end(publicIndex(routesFrom(routeSource)));
     }
-    const found=routeFor(req,store.data.routes,key);
+    const found=routeFor(req,routesFrom(routeSource),key);
     if (!found) { res.writeHead(404,{'cache-control':'no-store'}); return res.end('not found'); }
     const {route}=found, playback=isPlaybackPath(found.rest), configured=orderedTargets(route,playback);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
@@ -220,8 +221,8 @@ export function makeProxyHandler(store, key, metrics = null) {
   };
 }
 
-export function handleUpgrade(req, socket, head, store, key) {
-  const found=routeFor(req,store.data.routes,key); if(!found)return socket.destroy();
+export function handleUpgrade(req, socket, head, routeSource, key) {
+  const found=routeFor(req,routesFrom(routeSource),key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
   const target=joinTarget(targets[0],found.rest,new URL(req.url,'http://relay.invalid').search), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,found.route.clientProfile);

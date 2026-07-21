@@ -22,7 +22,7 @@ function fsyncDirectory(dir) {
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function writeAtomic(file, payload) {
+export function writeAtomic(file, payload) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
