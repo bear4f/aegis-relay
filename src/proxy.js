@@ -12,7 +12,11 @@ const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-autho
 const RETRY_STATUS = new Set([502, 503, 504]);
 const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 const runtime = new Map();
-let roundRobin = 0;
+// Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
+// connection to a distant origin each time added seconds of buffering before the first byte.
+const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:128, maxFreeSockets:16, timeout:65_000 };
+const httpAgent = new http.Agent(AGENT_OPTIONS);
+const httpsAgent = new https.Agent(AGENT_OPTIONS);
 
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
 const safeMethod = method => method === 'GET' || method === 'HEAD';
@@ -112,9 +116,13 @@ function safeUpstreamError(error) {
   return'上游连接失败';
 }
 function orderedTargets(route, playback) {
-  const all=normalizedUpstreams(route,playback), available=all.filter(t=>stateFor(route,t).openUntil<=Date.now()), pool=available.length?available:all;
-  if (!pool.length) return [];
-  const start=roundRobin++%pool.length; return [...pool.slice(start),...pool.slice(0,start)];
+  // Deterministic order — always prefer the primary line. Rotating upstreams per request sent a
+  // client's seeks to a different Emby server than the one holding its playback/transcode session,
+  // which showed up as long buffering and dropped streams. Extra lines are failover, not balancing.
+  const all=normalizedUpstreams(route,playback);
+  if (!all.length) return [];
+  const available=all.filter(t=>stateFor(route,t).openUntil<=Date.now());
+  return available.length?available:all;
 }
 
 export function getRuntimeStatus(routes) {
@@ -235,12 +243,13 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     req.on('error',()=>{});
 
     const routeOrigins=new Set([...normalizedUpstreams(route),...normalizedUpstreams(route,true)].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
-    const attempt=(targetValue,index)=>{
+    const attempt=(targetValue,index,freshSocket=false)=>{
       if (finished || clientGone) return;
       const target=continuation&&index===0?continuation.target:joinTarget(targetValue,found.rest,incoming.search), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
-      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate)};
+      const secure=target.protocol==='https:';
+      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),agent:freshSocket?false:(secure?httpsAgent:httpAgent)};
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
@@ -269,7 +278,9 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         res.writeHead(status,out);
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
         // half-open response, so a broken client or upstream cannot strand sockets.
-        pipeline(upRes,counter,res,()=>{ if(!up.destroyed)up.destroy(); finishMetric(); });
+        // Only tear the socket down on failure; a cleanly finished response returns to the pool so
+        // the next Range request (i.e. the next seek) skips the TCP+TLS handshake entirely.
+        pipeline(upRes,counter,res,err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); });
       });
       activeUp=up;
       const connectTimer=setTimeout(()=>up.destroy(new Error('connect timeout')),20_000);
@@ -280,6 +291,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         // A client that walked away is not an upstream fault; counting it opened circuits on
         // perfectly healthy nodes and produced sporadic 502s mid-session.
         if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
+        // A pooled connection the origin had already closed dies on reuse. Retry the same upstream
+        // once on a brand-new socket before treating it as a real failure.
+        const staleSocket=!freshSocket&&!finished&&canRetry&&(err?.code==='ECONNRESET'||/socket hang up/i.test(String(err?.message||'')));
+        if (staleSocket) return attempt(targetValue,index,true);
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
         if (!finished) { finished=true;metricDone?.(502,0,true);failResponse(res,502,`Bad Gateway\n${reason}`); }
@@ -298,7 +313,8 @@ export function handleUpgrade(req, socket, head, routeSource, key) {
   if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;
-  const up=transport.request({protocol:target.protocol,hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,servername:target.hostname,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate)});
+  // agent:false — an upgraded socket is hijacked for the WebSocket and must never return to a pool.
+  const up=transport.request({protocol:target.protocol,hostname:target.hostname,port:target.port,path:target.pathname+target.search,headers,servername:target.hostname,rejectUnauthorized:found.route.tlsVerify!==false,lookup:guardedLookup(found.route.allowPrivate),agent:false});
   // Unhandled socket errors on either leg would surface as an uncaught exception and restart the
   // whole relay, and a client that vanished used to leave the upstream socket open forever.
   let clientGone=false;
