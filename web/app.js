@@ -75,13 +75,49 @@ async function nodeUrl(r){if(r._url)return r._url;const d=await call(`/routes/${
 function statusPills(r){const pills=[`<span class="pill ${r.enabled?'on':'off'}">${r.enabled?'运行中':'已停用'}</span>`,`<span class="pill ${r.accessMode==='key'?'lock':'off'}">${r.accessMode==='key'?'密钥':'公开'}</span>`];if(r.clientProfile&&r.clientProfile.enabled)pills.push(`<span class="pill disguise">伪装${r.clientProfile.client?'：'+escapeHtml(r.clientProfile.client):''}</span>`);return pills.concat(r.tags.map(t=>`<span class="tag">${escapeHtml(t)}</span>`)).join('')}
 const EYE_SVG='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
 function routeMatches(r,q){if(!q)return true;const hay=`${r.name} ${r.alias} ${(r.tags||[]).join(' ')}`.toLowerCase();return hay.includes(q)}
+let dragRouteId=null;
+async function persistOrder(){
+  const updates=state.routes.map((route,index)=>({route,order:(index+1)*10})).filter(item=>Number(item.route.sortOrder)!==item.order);
+  if(!updates.length)return;
+  try{
+    for(const {route,order} of updates){await call(`/routes/${route.id}`,{method:'PATCH',body:JSON.stringify({sortOrder:order})});route.sortOrder=order}
+    toast('排序已保存');
+  }catch(error){toast(error.message,true);await refreshAll()}
+}
+function bindRowDrag(row,route){
+  const handle=row.querySelector('.drag-handle');
+  if(!handle||!handle.getAttribute('draggable'))return;
+  handle.addEventListener('dragstart',event=>{dragRouteId=route.id;row.classList.add('dragging');event.dataTransfer.effectAllowed='move';try{event.dataTransfer.setData('text/plain',route.id)}catch{}});
+  handle.addEventListener('dragend',()=>{dragRouteId=null;row.classList.remove('dragging');$$('.drop-above,.drop-below').forEach(el=>el.classList.remove('drop-above','drop-below'))});
+  row.addEventListener('dragover',event=>{
+    if(!dragRouteId||dragRouteId===route.id)return;
+    event.preventDefault();event.dataTransfer.dropEffect='move';
+    const box=row.getBoundingClientRect(),after=event.clientY>box.top+box.height/2;
+    row.classList.toggle('drop-below',after);row.classList.toggle('drop-above',!after);
+  });
+  row.addEventListener('dragleave',()=>row.classList.remove('drop-above','drop-below'));
+  row.addEventListener('drop',event=>{
+    if(!dragRouteId||dragRouteId===route.id)return;
+    event.preventDefault();
+    const box=row.getBoundingClientRect(),after=event.clientY>box.top+box.height/2;
+    const from=state.routes.findIndex(item=>item.id===dragRouteId);
+    if(from<0)return;
+    const [moved]=state.routes.splice(from,1);
+    let to=state.routes.findIndex(item=>item.id===route.id);
+    if(to<0)to=state.routes.length-1;
+    state.routes.splice(after?to+1:to,0,moved);
+    dragRouteId=null;
+    renderRoutes();
+    persistOrder();
+  });
+}
 function renderRoutes(){
   const q=(($('#node-search')||{}).value||'').trim().toLowerCase();
   const visible=state.routes.filter(r=>routeMatches(r,q));
   const body=$('#node-rows'),empty=$('#node-empty'),count=$('#node-count');
   if(count)count.innerHTML=state.routes.length?`共 <b>${state.routes.length}</b> 个节点${q?` · 匹配 <b>${visible.length}</b>`:''}`:'';
   body.innerHTML=visible.map(r=>`<tr data-id="${r.id}">
-    <td><div class="cell-name"><button class="star ${r.favorite?'on':''}" title="置顶">${r.favorite?'★':'☆'}</button><div style="min-width:0"><strong>${escapeHtml(r.name)}</strong><span class="node-path">/${escapeHtml(r.alias)}/${r.accessMode==='key'?'••••••/':''}</span></div></div></td>
+    <td><div class="cell-name"><span class="drag-handle" title="${q?'搜索时无法拖动排序':'拖动调整顺序'}" ${q?'':'draggable="true"'}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><button class="star ${r.favorite?'on':''}" title="置顶">${r.favorite?'★':'☆'}</button><div style="min-width:0"><strong>${escapeHtml(r.name)}</strong><span class="node-path">/${escapeHtml(r.alias)}/${r.accessMode==='key'?'••••••/':''}</span></div></div></td>
     <td><div class="cell-addr"><code class="addr-text">${ADDR_MASK}</code><button class="icon-btn addr-reveal" title="显示 / 隐藏完整地址">${EYE_SVG}</button><button class="btn ghost addr-copy">复制</button></div></td>
     <td><div class="cell-pills">${statusPills(r)}</div></td>
     <td class="cell-lines"><small class="muted">${r.upstreams.length} 上游 · ${r.playbackUpstreams.length?'独立播放':'播放跟随'}<br>${r.speedLimitMbps?`${r.speedLimitMbps} Mbps`:'不限速'}</small></td>
@@ -89,7 +125,7 @@ function renderRoutes(){
   </tr>`).join('');
   empty.innerHTML=state.routes.length?(visible.length?'':'<article class="panel empty-state"><h3>没有匹配的节点</h3><p>试着清空搜索条件。</p></article>'):'<article class="panel empty-state"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg><h3>创建第一个 Emby 节点</h3><p>只需填写名称、短路径和上游地址。</p></article>';
   body.querySelectorAll('tr').forEach(row=>{const r=state.routes.find(x=>x.id===row.dataset.id);if(!r)return;
-    row.querySelector('.test-node').onclick=()=>testConnection(r,row);
+    bindRowDrag(row,r);row.querySelector('.test-node').onclick=()=>testConnection(r,row);
     row.querySelector('.addr-copy').onclick=async()=>{try{await navigator.clipboard.writeText(await nodeUrl(r));toast('客户端地址已复制')}catch(e){toast(e.message,true)}};
     row.querySelector('.addr-reveal').onclick=async()=>{const el=row.querySelector('.addr-text'),wrap=row.querySelector('.cell-addr');if(el.dataset.shown){el.textContent=ADDR_MASK;el.dataset.shown='';wrap.classList.remove('shown')}else{el.textContent='加载中…';try{el.textContent=await nodeUrl(r);el.dataset.shown='1';wrap.classList.add('shown')}catch(e){el.textContent=ADDR_MASK;toast(e.message,true)}}};
     row.querySelector('.toggle-node').onclick=()=>patchRoute(r,{enabled:!r.enabled});
