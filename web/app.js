@@ -1,7 +1,7 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const scriptPath=new URL(document.currentScript?.src||location.href).pathname;
 const base=scriptPath.endsWith('/app.js')?scriptPath.replace(/\/app\.js$/,'/api'):location.pathname.replace(/\/$/,'')+'/api';
-const state={csrf:'',routes:[],agents:[],panelVersion:'',dashboard:null,editing:null,page:'dashboard'};
+const state={csrf:'',routes:[],agents:[],panelVersion:'',dashboard:null,editing:null,page:'dashboard',panelIcon:''};
 const titles={dashboard:'仪表盘',nodes:'节点管理',agents:'代理机器',traffic:'流量统计',diagnostics:'故障诊断',audit:'安全审计',notifications:'通知提醒',account:'个人设置',deployment:'部署向导'};
 // One-click client-identity templates for authorized upstreams. Device ID stays untouched so it remains unique per install.
 const UA_PRESETS=[
@@ -41,8 +41,23 @@ function uptime(start){if(!start)return'—';let s=Math.max(0,(Date.now()-new Da
 function recentDays(daily,count=14){const rows=[];for(let ago=count-1;ago>=0;ago--){const day=new Date();day.setUTCHours(0,0,0,0);day.setUTCDate(day.getUTCDate()-ago);const key=day.toISOString().slice(0,10);rows.push({key,label:`${day.getUTCMonth()+1}/${day.getUTCDate()}`,bytes:Number(daily?.[key]||0)})}return rows}
 function showSecret(content,{eyebrow='NODE CREDENTIALS',title='节点连接信息',description='完整节点地址和连接密码可由管理员随时再次查看。'}={}){$('#modal-eyebrow').textContent=eyebrow;$('#modal-title').textContent=title;$('#modal-description').textContent=description;$('#secret').textContent=content;$('#modal').classList.remove('hidden')}
 
+const DEFAULT_FAVICON='data:image/svg+xml;base64,'+btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#2f6f56"/><text x="32" y="45" font-family="Arial,Helvetica,sans-serif" font-size="38" font-weight="900" fill="#f4fbf6" text-anchor="middle">A</text></svg>');
+function applyPanelIcon(icon){
+  state.panelIcon=String(icon||'');
+  for(const el of document.querySelectorAll('.brand-mark,.hero-orbit b')){
+    if(state.panelIcon){const img=document.createElement('img');img.src=state.panelIcon;img.alt='面板图标';el.classList.add('custom');el.replaceChildren(img)}
+    else{el.classList.remove('custom');el.textContent='A'}
+  }
+  let link=document.querySelector('link[rel="icon"]');
+  if(!link){link=document.createElement('link');link.rel='icon';document.head.appendChild(link)}
+  link.href=state.panelIcon||DEFAULT_FAVICON;
+  const iconState=$('#icon-state');if(iconState){iconState.textContent=state.panelIcon?'自定义':'默认';iconState.className=`pill ${state.panelIcon?'on':''}`}
+}
+
 async function enterApp(){$('#auth').classList.add('hidden');$('#app').classList.remove('hidden');await refreshAll();streamDashboard()}
 async function start(){
+  // The icon is public branding: fetch it before login so the auth page and favicon match the panel.
+  applyPanelIcon('');call('/branding').then(d=>applyPanelIcon(d.icon||'')).catch(()=>{});
   // Resume a still-valid session (survives refresh) before falling back to the login screen.
   try{const r=await fetch(base+'/session',{headers:{'content-type':'application/json'}});if(r.ok){const d=await r.json();if(d&&d.csrf){state.csrf=d.csrf;await enterApp();return}}}catch{}
   try{const status=await call('/status');$('#auth').classList.remove('hidden');$(status.initialized?'#login':'#setup').classList.remove('hidden')}catch(e){$('#gate-msg').textContent=e.message}
@@ -198,6 +213,24 @@ $('#totp-disable').onclick=async()=>{
   if(!confirm('关闭两步验证后，登录将只需要密码。确认继续吗？'))return;
   try{await call('/account/totp/disable',{method:'POST',body:JSON.stringify({password:value('#totp-off-password'),code:value('#totp-off-code')})});toast('两步验证已关闭');await loadAccount()}catch(e){toast(e.message,true)}
 };
+async function savePanelIcon(payload){const d=await call('/account/icon',{method:'PUT',body:JSON.stringify(payload)});applyPanelIcon(d.icon||'');return d}
+$('#icon-upload').onclick=()=>$('#icon-file').click();
+$('#icon-file').onchange=()=>{
+  const file=$('#icon-file').files[0];
+  if(!file)return;
+  if(file.size>256*1024){toast('图标不能超过 256KB',true);$('#icon-file').value='';return}
+  const reader=new FileReader();
+  reader.onerror=()=>{toast('读取文件失败',true);$('#icon-file').value=''};
+  reader.onload=async()=>{try{await savePanelIcon({icon:reader.result});toast('面板图标已更新')}catch(e){toast(e.message,true)}finally{$('#icon-file').value=''}};
+  reader.readAsDataURL(file);
+};
+$('#icon-apply-url').onclick=async()=>{
+  const url=value('#icon-url').trim();
+  if(!url)return toast('请输入图片地址',true);
+  const btn=$('#icon-apply-url');btn.disabled=true;btn.textContent='拉取中…';
+  try{await savePanelIcon({url});setValue('#icon-url','');toast('面板图标已更新')}catch(e){toast(e.message,true)}finally{btn.disabled=false;btn.textContent='拉取并使用'}
+};
+$('#icon-reset').onclick=async()=>{try{await savePanelIcon({icon:''});toast('已恢复默认图标')}catch(e){toast(e.message,true)}};
 async function switchPage(page){state.page=page;$$('.page').forEach(x=>x.classList.add('hidden'));$(`#${page}-page`).classList.remove('hidden');$$('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#page-title').textContent=titles[page];$('#breadcrumb').textContent=`控制台 / ${titles[page]}`;$('#global-add').innerHTML=page==='agents'?'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加机器':'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点';$('#global-add').onclick=page==='agents'?openAgentModal:()=>openDrawer();if(page==='audit')await loadAudit();if(page==='agents')await loadAgents();if(page==='deployment')await loadDeployment();if(page==='notifications')await loadNotifications();if(page==='account')await loadAccount();if(page==='diagnostics')await loadRuntime()}
 $$('[data-page]').forEach(b=>b.onclick=()=>switchPage(b.dataset.page));$$('[data-jump]').forEach(b=>b.onclick=()=>switchPage(b.dataset.jump));
 

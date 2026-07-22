@@ -18,6 +18,7 @@ import { AgentApi, enrollmentInstallCommand, issueEnrollment, normalizeCertifica
 import { aggregateTelemetry, sanitizeTelemetry, telemetryFromMetrics } from './telemetry.js';
 import { activeLocalDomain, baseHostname, domainRequestRole, readDomainStatus, requestDomainSwitch } from './domain-control.js';
 import { qrRows } from './qr.js';
+import { fetchPanelIcon, MAX_ICON_BYTES, normalizePanelIcon } from './panel-icon.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const APP_VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'),'utf8')).version;
@@ -52,9 +53,9 @@ const agentUpgrader = fs.readFileSync(path.join(ROOT,'scripts','agent-upgrade.sh
 function headers(extra = {}) { return { 'cache-control':'no-store', 'content-security-policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'permissions-policy':'camera=(), microphone=(), geolocation=()', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff', 'x-frame-options':'DENY', ...extra }; }
 function json(res, status, body, extra = {}) { res.writeHead(status, headers({ 'content-type':'application/json; charset=utf-8', ...extra })); res.end(JSON.stringify(body)); }
 function ip(req) { return String(req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, ''); }
-async function body(req) {
+async function body(req, limit = 32 * 1024) {
   if (!String(req.headers['content-type']).startsWith('application/json')) throw Object.assign(new Error('application/json required'), { status: 415 });
-  let size = 0, chunks = []; for await (const c of req) { size += c.length; if (size > 32 * 1024) throw Object.assign(new Error('request too large'), { status: 413 }); chunks.push(c); }
+  let size = 0, chunks = []; for await (const c of req) { size += c.length; if (size > limit) throw Object.assign(new Error('request too large'), { status: 413 }); chunks.push(c); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw Object.assign(new Error('invalid JSON'), { status: 400 }); }
 }
 function cookies(req) { return Object.fromEntries(String(req.headers.cookie || '').split(';').map(v=>v.trim().split('=').map(decodeURIComponent)).filter(v=>v.length===2)); }
@@ -93,6 +94,8 @@ function dashboardSnapshot(){
 
 async function api(req, res, rel, cookiePath = cfg.adminPath) {
   if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath, version:APP_VERSION });
+  // The panel icon shows on the login screen and as the favicon, both of which render before any session exists.
+  if (req.method === 'GET' && rel === '/branding') return json(res, 200, { icon:store.data.settings.panelIcon||'' });
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
     const b = await body(req); if (!cfg.setupToken || !timingEqual(b.setupToken || '', cfg.setupToken)) { store.audit('setup.denied', ip(req)); return json(res, 403, { error:'invalid setup token' }); }
@@ -119,6 +122,13 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   const admin=()=>store.data.admin;
   const otpUri=secret=>`otpauth://totp/${encodeURIComponent(`AegisRelay:${admin().username}`)}?secret=${secret}&issuer=AegisRelay&digits=6&period=30`;
   if (req.method === 'GET' && rel === '/account') return json(res,200,{username:admin().username,totpEnabled:!!admin().totpSecret,recoveryRemaining:(admin().recoveryDigests||[]).length});
+  if (req.method === 'PUT' && rel === '/account/icon') {
+    const b=await body(req,MAX_ICON_BYTES*2);
+    const icon=typeof b.url==='string'&&b.url.trim()?normalizePanelIcon(await fetchPanelIcon(b.url.trim())):normalizePanelIcon(b.icon);
+    store.data.settings.panelIcon=icon;
+    store.audit(icon?'account.icon_updated':'account.icon_reset',ip(req));store.save();
+    return json(res,200,{ok:true,icon});
+  }
   if (req.method === 'POST' && rel === '/account/password') {
     const b=await body(req);
     if(!verifyPassword(b.currentPassword||'',admin().passwordHash)){store.audit('account.password_denied',ip(req));return json(res,401,{error:'当前密码不正确'});}

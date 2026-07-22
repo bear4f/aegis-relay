@@ -67,7 +67,7 @@
 
       <section id="notifications-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">KEEPALIVE REMINDERS</span><h2>通知提醒</h2><p>通过 Telegram Bot 推送节点保号周期提醒；Bot Token 加密存储且不会回显。</p></div></div><div class="dashboard-grid"><article class="panel"><div class="panel-head"><div><span class="eyebrow">TELEGRAM</span><h3>机器人设置</h3></div><span id="telegram-state" class="pill">未配置</span></div><div class="form-grid"><label>Bot Token<input id="telegram-token" type="password" placeholder="仅设置或轮换时填写"></label><label>Chat ID<input id="telegram-chat" placeholder="个人或群组 Chat ID"></label><label class="full switch-row"><span>启用定时提醒</span><input id="telegram-enabled" type="checkbox"></label></div><div class="inline-actions"><button id="save-notifications" class="btn primary">保存设置</button><button id="test-notifications" class="btn ghost">发送测试消息</button></div></article><article class="panel"><span class="eyebrow">HOW IT WORKS</span><h3>提醒规则</h3><p class="muted">在节点编辑器中填写保号周期。达到周期后每天最多提醒一次；完成维护后在节点卡片点击“已保号”，周期会重新计算。</p><p class="muted">通知失败不会影响代理请求，也不会把 Bot Token 写入日志。</p></article></div></section>
 
-      <section id="account-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ACCOUNT</span><h2>个人设置</h2><p>修改管理员密码，并按需开启或关闭两步验证。</p></div></div>
+      <section id="account-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">ACCOUNT</span><h2>个人设置</h2><p>修改管理员密码、自定义面板图标，并按需开启或关闭两步验证。</p></div></div>
         <div class="dashboard-grid">
           <article class="panel"><div class="panel-head"><div><span class="eyebrow">PASSWORD</span><h3>修改密码</h3></div><span id="account-user" class="pill"></span></div>
             <div class="form-grid"><label class="full">当前密码<input id="pw-current" type="password" autocomplete="current-password"></label><label class="full">新密码<input id="pw-new" type="password" autocomplete="new-password" placeholder="至少 14 位"></label><label class="full">确认新密码<input id="pw-confirm" type="password" autocomplete="new-password"></label></div>
@@ -88,6 +88,12 @@
               <div class="form-grid"><label>当前密码<input id="totp-off-password" type="password" autocomplete="current-password"></label><label>当前验证码<input id="totp-off-code" inputmode="numeric" maxlength="6" placeholder="000000"></label></div>
               <div class="inline-actions"><button id="totp-disable" class="btn ghost danger">关闭两步验证</button></div>
             </div>
+          </article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">PANEL ICON</span><h3>面板图标</h3></div><span id="icon-state" class="pill">默认</span></div>
+            <p class="muted">替换左上角标志和浏览器标签页图标；支持 PNG / JPG / GIF / WebP / SVG / ICO，最大 256KB。</p>
+            <div class="icon-preview-row"><span id="icon-preview" class="brand-mark">A</span><div class="inline-actions"><button id="icon-upload" class="btn primary">从本地上传</button><button id="icon-reset" class="btn ghost">恢复默认</button></div><input id="icon-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/x-icon,.ico" class="hidden"></div>
+            <div class="form-grid"><label class="full">或使用在线图片地址<input id="icon-url" type="url" maxlength="500" placeholder="https://example.com/logo.png"><small>面板会在服务器端下载该图片并保存副本，客户端不会再访问原地址。</small></label></div>
+            <div class="inline-actions"><button id="icon-apply-url" class="btn ghost">拉取并使用</button></div>
           </article>
         </div>
       </section>

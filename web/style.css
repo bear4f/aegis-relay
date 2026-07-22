@@ -82,6 +82,10 @@ svg{stroke-linecap:round;stroke-linejoin:round}
   box-shadow:0 8px 22px var(--accent-glow)}
 .brand-large .brand-mark{width:52px;height:52px;border-radius:16px;font-size:23px}
 .brand-large strong{font-size:23px}
+.brand-mark.custom{background:#0e1411;box-shadow:none;overflow:hidden}
+.brand-mark img{width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block}
+.hero-orbit b img{width:44px;height:44px;object-fit:cover;border-radius:12px;display:block}
+.icon-preview-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:14px 0}
 
 /* ============================================================ Auth */
 .auth-shell{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(440px,.85fr)}
