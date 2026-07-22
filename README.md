@@ -68,29 +68,36 @@ https://emby.example.com/family/<访问密钥>/
 curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh | sudo sh
 ```
 
-安装结束会显示：
+安装末尾会引导两步确认并**自动申请证书**（需要域名已解析到本机、放行 TCP 80/443；用 Cloudflare 时首次签证建议先设为 DNS only）：
+
+1. **步骤 1/2**：输入面板域名和证书邮箱
+2. **步骤 2/2**：输入本机 Emby 反代域名，**回车默认与面板同域**；填不同域名则自动申请第二张证书并完成双域名切换
+
+完成后直接显示：
 
 ```text
-管理地址: http://服务器公网IP:9080/admin-随机路径
+管理地址: https://你的面板域名/
 Setup Token: 一次性随机令牌
+Emby 客户端入口: https://你的反代域名/<节点别名>/<访问密钥>/
 ```
 
-在云防火墙临时放行 TCP 9080，打开该地址，设置至少 14 位密码并绑定 TOTP。
+打开管理地址，用 Setup Token 设置至少 14 位密码并绑定 TOTP，全程无需在云防火墙开放 9080。
 
 > 初始化期间不要添加正式节点，不要把 Setup Token 发到聊天或工单。
 
-### 域名与自动证书
+### 跳过引导时的域名与自动证书
 
-1. 把域名 A/AAAA 记录指向服务器，放行 TCP 80 / 443（用 Cloudflare 时首次签证建议先设为 DNS only）
-2. 面板初始化完成后执行：
+安装时跳过域名引导（或非交互执行）会回到临时公网初始化模式：在云防火墙临时放行 TCP 9080，按输出的 `http://IP:9080/admin-随机路径` 完成初始化，之后任意时刻执行：
 
 ```bash
-sudo aegis-relay domain panel.example.com admin@example.com
+sudo aegis-relay domain                      # 交互式两步确认，同上
+sudo aegis-relay domain panel.example.com admin@example.com                   # 单域名
+sudo aegis-relay domain panel.example.com admin@example.com emby.example.com  # 双域名
 ```
 
-3. 随后在「代理机器 → 本地 Agent」填写一个**不同的**代理域名，面板会自动完成第二张证书与双域名切换。
+已在单域名模式运行后，也可以在「代理机器 → 本地 Agent」填写一个**不同的**代理域名，面板会自动完成第二张证书与双域名切换。
 
-切换完成后职责分离：
+双域名模式下职责分离：
 
 | 域名 | 提供 |
 |---|---|
@@ -117,7 +124,7 @@ DNS 或证书失败时不会关闭 9080 临时入口，修复后重跑即可；N
 sudo aegis-relay status      # 容器状态
 sudo aegis-relay logs        # 实时日志
 sudo aegis-relay update      # 拉取最新版并重建
-sudo aegis-relay domain panel.example.com admin@example.com
+sudo aegis-relay domain      # 两步确认面板域名与 Emby 反代域名（默认同域），自动申请证书
 sudo aegis-relay proxy-domain emby.example.com   # 面板执行器不可用时的手动兜底
 ```
 

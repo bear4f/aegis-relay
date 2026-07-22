@@ -4,8 +4,11 @@ INSTALL_DIR="/opt/aegis-relay"
 ACTION=${1:-status}
 case "$ACTION" in
   domain)
-    [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay domain panel.example.com admin@example.com" >&2; exit 1; }
-    exec "$INSTALL_DIR/scripts/configure-domain.sh" "$2" "$3"
+    shift
+    case "$#" in
+      0|2|3) exec "$INSTALL_DIR/scripts/domain-wizard.sh" "$@";;
+      *) echo "用法: sudo aegis-relay domain [panel.example.com admin@example.com [emby.example.com]]" >&2; exit 1;;
+    esac
     ;;
   proxy-domain)
     [ "$#" -eq 2 ] || { echo "用法: sudo aegis-relay proxy-domain emby.example.com" >&2; exit 1; }
@@ -22,5 +25,5 @@ case "$ACTION" in
   status)
     cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose ps; else docker-compose ps; fi
     ;;
-  *) echo "用法: aegis-relay {status|logs|update|domain DOMAIN EMAIL|proxy-domain DOMAIN}" >&2; exit 1;;
+  *) echo "用法: aegis-relay {status|logs|update|domain [PANEL EMAIL [PROXY]]|proxy-domain DOMAIN}" >&2; exit 1;;
 esac
