@@ -17,6 +17,12 @@ if command -v apt-get >/dev/null 2>&1; then
   if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2 2>/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose
   fi
+  # Some minimal VPS images ship an AppArmor-enabled kernel without the apparmor_parser tool, which
+  # makes `docker build`/`docker run` abort. Install it if missing and restart dockerd so it re-detects.
+  if ! command -v apparmor_parser >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y apparmor || true
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet docker 2>/dev/null; then systemctl restart docker || true; fi
+  fi
 else
   echo "自动安装目前支持 Debian/Ubuntu；其他系统请参照 README 手动部署。" >&2
   exit 1
