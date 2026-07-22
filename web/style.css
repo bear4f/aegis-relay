@@ -393,10 +393,14 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 /* ============================================================ Mobile bottom nav */
 .mobile-bar{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;
   background:var(--rail);border-top:1px solid rgba(255,255,255,.08);
-  padding:8px 4px env(safe-area-inset-bottom,10px)}
-.mobile-bar-inner{display:flex;justify-content:space-around}
-.mobile-bar button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 10px;
-  background:none;border:0;color:var(--rail-text-3);font-size:10px;font-weight:600}
+  padding:8px 0 env(safe-area-inset-bottom,10px)}
+/* All nine pages live here. On a phone they overflow, so the row scrolls horizontally and the
+   active tab is scrolled into view from JS; the scrollbar itself is hidden for a clean bar. */
+.mobile-bar-inner{display:flex;gap:2px;overflow-x:auto;scroll-snap-type:x proximity;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:0 8px}
+.mobile-bar-inner::-webkit-scrollbar{display:none}
+.mobile-bar button{flex:0 0 auto;min-width:56px;scroll-snap-align:center;display:flex;flex-direction:column;
+  align-items:center;gap:3px;padding:6px 8px;background:none;border:0;color:var(--rail-text-3);font-size:10px;font-weight:600}
 .mobile-bar button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8}
 .mobile-bar button.active{color:#7fdcb0}
 
