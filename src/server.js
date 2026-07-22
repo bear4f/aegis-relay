@@ -105,8 +105,9 @@ function dashboardSnapshot(){
 async function api(req, res, rel, cookiePath = cfg.adminPath) {
   if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath, version:APP_VERSION });
   // The panel icon shows on the login screen and as the favicon, both of which render before any session
-  // exists. It can be a few hundred KB, so let browsers cache it briefly instead of re-downloading per load.
-  if (req.method === 'GET' && rel === '/branding') return json(res, 200, { icon:store.data.settings.panelIcon||'' }, { 'cache-control':'private, max-age=300' });
+  // exists. Served no-store (via the default headers): caching it made a freshly saved icon revert to the
+  // stale cached value on the next refresh.
+  if (req.method === 'GET' && rel === '/branding') return json(res, 200, { icon:store.data.settings.panelIcon||'' });
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
     const b = await body(req); if (!cfg.setupToken || !timingEqual(b.setupToken || '', cfg.setupToken)) { store.audit('setup.denied', ip(req)); return json(res, 403, { error:'invalid setup token' }); }
