@@ -46,7 +46,7 @@ chown -R 10001:10001 data
 chmod 700 data
 if docker compose version >/dev/null 2>&1; then docker compose up -d --build; else docker-compose up -d --build; fi
 install -m 0755 scripts/aegis-relay /usr/local/bin/aegis-relay
-chmod 0755 scripts/configure-domain.sh scripts/configure-local-domain.sh scripts/host-domain-apply.sh
+chmod 0755 scripts/configure-domain.sh scripts/configure-local-domain.sh scripts/host-domain-apply.sh scripts/domain-wizard.sh
 
 # The panel container stays unprivileged. A narrowly scoped host service watches only for
 # validated domain-switch requests and can run the fixed Nginx/Certbot workflow as root.
@@ -78,13 +78,42 @@ fi
 PUBLIC_IP=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 ADMIN_SLUG=$(sed -n 's/^ADMIN_PATH=//p' .env | head -n1)
 if [ "$FIRST_INSTALL" -eq 1 ]; then
+  DOMAIN_DONE=0
+  if (exec < /dev/tty > /dev/tty) 2>/dev/null; then
+    echo
+    echo "AegisRelay 已启动。现在可以直接配置域名并自动申请 HTTPS 证书，"
+    echo "跳过临时开放 9080 端口的步骤（需要域名已解析到本机，放行 TCP 80/443）。"
+    printf '是否现在配置域名？[Y/n] ' > /dev/tty
+    IFS= read -r ANSWER < /dev/tty || ANSWER=n
+    case "$ANSWER" in
+      ''|[Yy]*)
+        if sh scripts/domain-wizard.sh; then
+          DOMAIN_DONE=1
+        else
+          echo "域名配置未完成，可稍后重试：sudo aegis-relay domain" >&2
+        fi
+        ;;
+    esac
+  fi
   echo
-  echo "AegisRelay 已启动（临时公网初始化模式）"
-  echo "管理地址: http://$PUBLIC_IP:9080/$ADMIN_SLUG"
-  echo "Setup Token: $SETUP"
-  echo
-  echo "完成管理员和 2FA 设置后，执行："
-  echo "sudo aegis-relay domain 你的域名 你的邮箱"
+  if [ "$DOMAIN_DONE" -eq 1 ]; then
+    PANEL_BASE=$(sed -n 's/^PUBLIC_BASE_URL=//p' .env | head -n1)
+    PROXY_BASE=$(sed -n 's/^LOCAL_PROXY_BASE_URL=//p' .env | head -n1)
+    echo "管理地址: $PANEL_BASE/"
+    echo "Setup Token: $SETUP"
+    echo "Emby 客户端入口: ${PROXY_BASE:-$PANEL_BASE}/<节点别名>/<访问密钥>/"
+    echo
+    echo "浏览器打开管理地址，用 Setup Token 完成管理员和 2FA 设置。"
+    echo "无需在云防火墙开放 9080 端口。"
+  else
+    echo "AegisRelay 已启动（临时公网初始化模式）"
+    echo "管理地址: http://$PUBLIC_IP:9080/$ADMIN_SLUG"
+    echo "Setup Token: $SETUP"
+    echo
+    echo "在云防火墙临时放行 TCP 9080 后完成管理员和 2FA 设置，随后执行："
+    echo "sudo aegis-relay domain"
+    echo "按提示确认面板域名和 Emby 反代域名（默认同域），证书自动申请。"
+  fi
 else
   echo "AegisRelay 已更新并重新启动，现有密钥与数据保持不变。代理域名切换执行器已就绪。"
 fi

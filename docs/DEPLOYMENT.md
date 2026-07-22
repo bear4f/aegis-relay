@@ -2,9 +2,18 @@
 
 ## 部署状态机
 
+### 0. 安装时域名引导（推荐路径）
+
+`bootstrap.sh` 首次安装结束时（检测到交互终端）会引导两步确认并自动申请证书：
+
+1. 步骤 1/2：面板域名 + 证书邮箱
+2. 步骤 2/2：本机 Emby 反代域名，回车默认与面板同域；填不同域名则追加第二张证书并切换为双域名 Nginx 路由
+
+确认后自动执行 Nginx 配置、Certbot 签证和容器端口收口，安装输出直接给出 `https://面板域名/` 管理地址和 Setup Token，全程无需开放 9080。跳过引导（回答 `n`、无终端或证书失败）则进入下述临时初始化模式。
+
 ### 1. 临时初始化
 
-`bootstrap.sh` 首次安装时使用：
+跳过安装时域名引导后，`bootstrap.sh` 首次安装使用：
 
 ```env
 ADMIN_PUBLISH_IP=0.0.0.0
@@ -27,10 +36,12 @@ PUBLIC_BASE_URL=
 ### 3. HTTPS 收口
 
 ```bash
-sudo aegis-relay domain panel.example.com admin@example.com
+sudo aegis-relay domain                      # 交互式：两步确认面板域名与 Emby 反代域名（默认同域）
+sudo aegis-relay domain panel.example.com admin@example.com                   # 非交互单域名
+sudo aegis-relay domain panel.example.com admin@example.com emby.example.com  # 非交互双域名
 ```
 
-只有当 Nginx 配置校验和 Certbot 签证全部成功后，脚本才会更新：
+安装时的域名引导执行的就是同一流程。只有当 Nginx 配置校验和 Certbot 签证全部成功后，脚本才会更新：
 
 ```env
 ADMIN_PUBLISH_IP=127.0.0.1
