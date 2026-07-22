@@ -390,19 +390,26 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 @keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
 .toast.error{border-left-color:var(--red);color:var(--red)}
 
-/* ============================================================ Mobile bottom nav */
-.mobile-bar{display:none;position:fixed;bottom:0;left:0;right:0;z-index:30;
-  background:var(--rail);border-top:1px solid rgba(255,255,255,.08);
-  padding:8px 0 env(safe-area-inset-bottom,10px)}
-/* All nine pages live here. On a phone they overflow, so the row scrolls horizontally and the
-   active tab is scrolled into view from JS; the scrollbar itself is hidden for a clean bar. */
-.mobile-bar-inner{display:flex;gap:2px;overflow-x:auto;scroll-snap-type:x proximity;
-  -webkit-overflow-scrolling:touch;scrollbar-width:none;padding:0 8px}
-.mobile-bar-inner::-webkit-scrollbar{display:none}
-.mobile-bar button{flex:0 0 auto;min-width:56px;scroll-snap-align:center;display:flex;flex-direction:column;
-  align-items:center;gap:3px;padding:6px 8px;background:none;border:0;color:var(--rail-text-3);font-size:10px;font-weight:600}
-.mobile-bar button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8}
-.mobile-bar button.active{color:#7fdcb0}
+/* ============================================================ Mobile menu (top-right)
+   The nine pages were too many for a bottom bar, so on phones the sidebar collapses into a
+   top-right button that opens this dropdown. Both are hidden on desktop where the rail is shown. */
+.nav-toggle{display:none;place-items:center;width:42px;height:42px;flex-shrink:0;border:1px solid var(--line-2);
+  border-radius:12px;background:var(--surface);color:var(--text);cursor:pointer}
+.nav-toggle svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.nav-toggle:hover{border-color:var(--accent);color:var(--accent)}
+.mobile-menu{position:fixed;inset:0;z-index:40;background:rgba(20,18,12,.42);backdrop-filter:blur(2px)}
+.mobile-menu.hidden{display:none}
+.mobile-menu-panel{position:absolute;top:12px;right:12px;width:min(264px,calc(100vw - 24px));
+  max-height:calc(100vh - 24px);overflow:auto;background:var(--surface);border:1px solid var(--line);
+  border-radius:20px;box-shadow:var(--shadow);padding:8px;display:grid;gap:2px;animation:menuPop .16s ease}
+@keyframes menuPop{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:none}}
+.mobile-menu-panel button{display:flex;align-items:center;gap:13px;width:100%;padding:12px 14px;background:none;
+  border:0;border-radius:12px;color:var(--text-2);font-size:14px;font-weight:600;text-align:left;cursor:pointer}
+.mobile-menu-panel button svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;flex-shrink:0}
+.mobile-menu-panel button:hover{background:var(--surface-2);color:var(--text)}
+.mobile-menu-panel button.active{color:var(--accent);background:var(--accent-dim)}
+.mobile-menu-panel .menu-logout{color:var(--red);border-top:1px solid var(--line);margin-top:4px;border-radius:0}
+.mobile-menu-panel .menu-logout:hover{background:var(--surface-2);color:var(--red)}
 
 /* ============================================================ Responsive */
 @media(max-width:1100px){
@@ -412,13 +419,18 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 }
 @media(max-width:760px){
   .sidebar{display:none}
-  .workspace{margin-left:0;padding-bottom:76px}
-  .mobile-bar{display:block}
-  .topbar{height:auto;padding:16px 18px;flex-wrap:wrap;gap:10px}
+  .workspace{margin-left:0}
+  .nav-toggle{display:grid}
+  .topbar{height:auto;padding:14px 16px;gap:10px}
+  .topbar>div:first-child{min-width:0;flex:1}
   .page{padding:22px 16px 40px}
   .metric-grid,.node-grid,.deploy-grid{grid-template-columns:1fr}
   .hero{padding:26px;min-height:auto}.hero-orbit{display:none}
   .top-actions .live{display:none}
+  /* Collapse the add button to an icon so title + add + menu fit one row. */
+  #global-add{font-size:0;gap:0;padding:0;width:42px;height:42px;justify-content:center;border-radius:12px}
+  #global-add svg{width:20px;height:20px}
+  .h1,.topbar h1{font-size:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .section-intro{align-items:flex-start;flex-direction:column;gap:12px}
   .inline-actions{flex-wrap:wrap}
   .form-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}

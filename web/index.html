@@ -40,7 +40,7 @@
     </aside>
 
     <main class="workspace">
-      <header class="topbar"><div><p id="breadcrumb">控制台 / 仪表盘</p><h1 id="page-title">仪表盘</h1></div><div class="top-actions"><span id="live-state" class="live"><i></i>实时</span><button id="global-add" class="btn primary"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点</button></div></header>
+      <header class="topbar"><div><p id="breadcrumb">控制台 / 仪表盘</p><h1 id="page-title">仪表盘</h1></div><div class="top-actions"><span id="live-state" class="live"><i></i>实时</span><button id="global-add" class="btn primary"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点</button><button id="nav-toggle" class="nav-toggle" aria-label="打开菜单"><svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button></div></header>
 
       <section id="dashboard-page" class="page active-page">
         <div class="hero"><div><span class="eyebrow">运行概览</span><h2>所有节点，一眼掌握。</h2><p>实时流量、健康状态和活动连接集中展示。</p></div><div class="hero-orbit"><span></span><b>A</b></div></div>
@@ -101,17 +101,18 @@
       <section id="deployment-page" class="page hidden"><div class="section-intro"><div><span class="eyebrow">HTTPS HANDOFF</span><h2>部署向导</h2><p>统一管理面板与所有代理机器的 HTTPS 证书通知邮箱。</p></div></div><div id="deployment-status" class="deploy-grid"></div><div class="dashboard-grid"><article class="panel"><div class="panel-head"><div><span class="eyebrow">CERTIFICATE CONTACT</span><h3>统一证书邮箱</h3></div><span id="certificate-email-state" class="pill">未配置</span></div><div class="form-grid"><label class="full">Let's Encrypt 通知邮箱<input id="certificate-email" type="email" maxlength="254" placeholder="admin@example.com"><small>只需保存一次；本地代理域名切换和以后生成的每条代理机一键指令都会自动使用该邮箱申请证书及接收到期通知。</small></label></div><div class="inline-actions"><button id="save-certificate-email" class="btn primary">保存统一邮箱</button></div></article><article class="panel guide"><ol><li><b>管理域名</b><p>首次安装仍执行 <code>sudo aegis-relay domain panel.example.com admin@example.com</code>，完成 2FA 面板的 HTTPS 收口。</p></li><li><b>准备代理域名</b><p>把另一个域名解析到主代理机器，确认 80/443 可访问；Cloudflare 可保持代理，但不能拦截证书验证路径。</p></li><li><b>面板一键切换</b><p>进入“代理机器”，在“本地 Agent”填写代理域名并保存。系统会自动配置 Nginx、申请证书并重启服务。</p></li><li><b>严格隔离</b><p>切换成功后，管理域名只开放面板和 Agent 控制接口；新代理域名承载 Emby，旧代理域名立即退出 Nginx 路由。</p></li></ol></article></div></section>
     </main>
 
-    <nav class="mobile-bar"><div class="mobile-bar-inner">
+    <div id="mobile-menu" class="mobile-menu hidden"><nav class="mobile-menu-panel">
       <button data-page="dashboard" class="active"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>仪表盘</button>
-      <button data-page="nodes"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>节点</button>
-      <button data-page="agents"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M12 7v4M6.7 16.8l3.8-4M17.3 16.8l-3.8-4"/></svg>机器</button>
-      <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>流量</button>
-      <button data-page="diagnostics"><svg viewBox="0 0 24 24"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>诊断</button>
-      <button data-page="notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg>通知</button>
-      <button data-page="audit"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>审计</button>
-      <button data-page="account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>设置</button>
-      <button data-page="deployment"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><rect x="9" y="14" width="6" height="6"/></svg>部署</button>
-    </div></nav>
+      <button data-page="nodes"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><circle cx="7" cy="7" r="1"/><circle cx="7" cy="17" r="1"/></svg>节点管理</button>
+      <button data-page="agents"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M12 7v4M6.7 16.8l3.8-4M17.3 16.8l-3.8-4"/></svg>代理机器</button>
+      <button data-page="traffic"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg>流量统计</button>
+      <button data-page="diagnostics"><svg viewBox="0 0 24 24"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg>故障诊断</button>
+      <button data-page="audit"><svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>安全审计</button>
+      <button data-page="notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>通知提醒</button>
+      <button data-page="account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg>个人设置</button>
+      <button data-page="deployment"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><rect x="9" y="14" width="6" height="6"/></svg>部署向导</button>
+      <button id="nav-logout" class="menu-logout"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><line x1="21" y1="12" x2="9" y2="12"/></svg>退出登录</button>
+    </nav></div>
   </div>
 
   <div id="drawer-backdrop" class="backdrop hidden"></div>
