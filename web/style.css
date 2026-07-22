@@ -490,12 +490,15 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .agent-modal-card{width:min(680px,100%)}
 .enroll-routes{border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;margin:0 0 16px;background:var(--surface)}
 .enroll-routes legend{padding:0 6px;color:var(--text-2);font-size:12px;font-weight:600}
-.agent-route-list{display:grid;gap:6px;max-height:220px;overflow:auto;padding-right:4px}
-.agent-route-list label{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--r-xs);
-  cursor:pointer;transition:background .15s;margin:0;font-size:13px;color:var(--text)}
-.agent-route-list label:hover{background:var(--surface-2)}
-.agent-route-list input{width:16px;height:16px;accent-color:var(--accent);margin:0;flex-shrink:0}
-.agent-route-list small{color:var(--text-3);font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.agent-route-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(156px,1fr));gap:8px;max-height:264px;overflow:auto;padding:2px}
+.agent-route-list label{display:flex;align-items:center;gap:10px;margin:0;padding:9px 11px;border:1px solid var(--line);
+  border-radius:var(--r-xs);background:var(--surface);cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s;min-width:0}
+.agent-route-list label:hover{border-color:var(--accent);background:var(--surface-2)}
+.agent-route-list label.checked{border-color:var(--accent);background:var(--accent-dim);box-shadow:inset 0 0 0 1px var(--accent)}
+.agent-route-list input{width:17px;height:17px;accent-color:var(--accent);margin:0;flex-shrink:0}
+.agent-route-list label>span{display:flex;flex-direction:column;gap:2px;min-width:0;line-height:1.2}
+.agent-route-list label>span>b{font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-route-list small{color:var(--text-3);font-family:ui-monospace,Menlo,monospace;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .command-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
 .command-head strong{display:block;font-size:12px;color:var(--amber);margin-top:3px}
 .command-result pre{padding:14px;border:1px solid var(--line-2);border-radius:var(--r-xs);
@@ -552,11 +555,15 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .agent-routes summary::before{content:"+";width:16px;color:var(--accent);font-weight:800}
 .agent-routes[open] summary::before{content:"−"}
 .routes-count{margin-left:auto;color:var(--text-3);font-size:11px;font-weight:500}
-.route-filter{padding:0 14px 10px}
-.route-filter input{width:100%;padding:8px 12px;border:1px solid var(--line-2);border-radius:99px;
+.route-tools{display:flex;align-items:center;gap:8px;padding:0 12px 10px;flex-wrap:wrap}
+.route-bulk{padding:5px 12px;font-size:11px;font-weight:600;border-radius:99px;border:1px solid var(--line-2);
+  background:var(--surface);color:var(--text-2);cursor:pointer;transition:.15s}
+.route-bulk:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+.route-tools .agent-route-search{flex:1;min-width:130px;padding:7px 12px;border:1px solid var(--line-2);border-radius:99px;
   background:var(--inset);color:var(--text);outline:none;font-size:12px}
-.route-filter input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
-.agent-routes .agent-route-list{padding:0 10px 12px}
+.route-tools .agent-route-search:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+.agent-routes .agent-route-list{padding:2px 12px 12px}
+.enroll-routes .route-tools{padding:0 0 10px}
 
 /* density tuning for the node table */
 .data-table td{padding:10px 14px}
@@ -637,3 +644,31 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .totp-manual small{display:block;color:var(--text-2);line-height:1.6;margin-bottom:8px}
 .totp-manual code{display:block;padding:10px 12px;border:1px solid var(--line-2);border-radius:var(--r-xs);
   background:var(--inset);font-size:12px;word-break:break-all;letter-spacing:.06em;color:var(--accent)}
+
+/* ============================================================ Node table → cards on phones.
+   Placed last so it overrides the earlier .data-table{min-width:820px} density rule. The five
+   columns cannot fit a phone, so each row becomes a self-contained card instead of a sideways-
+   scrolling table whose status and action columns fall off the right edge. */
+@media(max-width:760px){
+  .table-panel{background:transparent;border:0;box-shadow:none;overflow:visible;padding:0}
+  .table-wrap{overflow:visible}
+  .data-table{min-width:0;display:block}
+  .data-table thead{display:none}
+  .data-table tbody{display:grid;gap:12px}
+  .data-table tr{display:block;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:15px 16px;box-shadow:0 6px 20px rgba(45,38,22,.05)}
+  .data-table tbody tr:hover{background:var(--surface)}
+  .data-table td{display:block;padding:0;border:0}
+  .data-table td+td{margin-top:12px}
+  .data-table .drag-handle{display:none}
+  .data-table .cell-name{gap:9px}
+  .data-table .cell-name strong{font-size:15px;white-space:normal}
+  .data-table .cell-name .node-path{font-size:12px}
+  .cell-addr{max-width:none;background:var(--inset);border:1px solid var(--line);border-radius:var(--r-xs);padding:8px 10px}
+  .cell-addr code{font-size:12px}
+  .cell-pills{gap:6px}
+  .cell-pills .pill,.cell-pills .tag{font-size:10.5px;padding:4px 9px}
+  .data-table .cell-lines small{white-space:normal;line-height:1.5}
+  .row-actions{justify-content:flex-start;flex-wrap:wrap;gap:7px;padding-top:12px;border-top:1px solid var(--line)}
+  .row-actions .btn{padding:8px 13px;font-size:12px}
+}
