@@ -80,7 +80,7 @@ export function remoteAgentStatus(agent, now=Date.now()) {
 export function publicAgent(agent, data, runtime=null, now=Date.now()) {
   const local=agent.id===LOCAL_AGENT_ID,status=local?(runtime?.status||'online'):remoteAgentStatus(agent,now);
   return {
-    id:agent.id,name:agent.name||agent.id,transport:agent.transport||'poll',domain:agent.domain||'',status,
+    id:agent.id,name:agent.name||agent.id,transport:agent.transport||'poll',domain:agent.domain||'',proxyMode:local?'domain':(agent.proxyMode||(agent.domain?'domain':'ip')),status,
     routeIds:routeIdsForAgent(data,agent.id),lastSeen:runtime?.lastSeen||agent.lastSeen||agent.enrolledAt||null,
     applyState:runtime?.applyState||agent.applyState||'waiting',proxyHealthy:runtime?.proxyHealthy===true||agent.proxyHealthy===true,
     desiredRevision:Number(runtime?.desiredRevision??agent.desiredRevision??0),appliedRevision:Number(runtime?.appliedRevision??agent.appliedRevision??0),

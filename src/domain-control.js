@@ -38,6 +38,7 @@ export function readDomainStatus(dataFile){
   return {
     requestId:String(value.requestId||'').slice(0,80),
     state:['pending','applying','active','failed'].includes(value.state)?value.state:'failed',
+    mode:value.mode==='ip'?'ip':'domain',
     desiredDomain:String(value.desiredDomain||'').slice(0,253),
     currentDomain:String(value.currentDomain||'').slice(0,253),
     message:String(value.message||'').slice(0,500),
@@ -51,8 +52,8 @@ export function requestDomainSwitch({dataFile,domain,email,currentDomain=''}){
   if(!certificateEmail)throw new Error('请先在部署向导保存统一证书邮箱');
   if(!/^[^\s@]+@[^\s@]+$/.test(certificateEmail)||certificateEmail.length>254)throw new Error('证书邮箱格式无效');
   const requestId=randomToken(18),requestedAt=new Date().toISOString(),dir=path.dirname(dataFile);
-  const request={version:1,requestId,desiredDomain,certificateEmail,requestedAt};
-  const status={requestId,state:'pending',desiredDomain,currentDomain,message:'等待主机申请证书并切换 Nginx',updatedAt:requestedAt};
+  const request={version:1,requestId,mode:'domain',desiredDomain,certificateEmail,requestedAt};
+  const status={requestId,state:'pending',mode:'domain',desiredDomain,currentDomain,message:'等待主机申请证书并切换 Nginx',updatedAt:requestedAt};
   atomicJson(path.join(dir,STATUS_FILE),status);
   atomicJson(path.join(dir,REQUEST_FILE),request);
   return status;

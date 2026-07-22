@@ -63,6 +63,9 @@ function cleanCapabilities(value) {
   return [...new Set((Array.isArray(value)?value:[]).map(item=>String(item)).filter(item=>/^[a-z0-9-]{1,32}$/.test(item)))].slice(0,16);
 }
 
+// 'ip' = serve over the machine's public IP on plain HTTP; 'domain' = HTTPS via Let's Encrypt.
+function cleanProxyMode(value) { return value==='ip'?'ip':value==='domain'?'domain':''; }
+
 function cleanMachine(value={}) {
   const out={};
   for(const field of ['hostname','architecture','platform']){
@@ -84,8 +87,12 @@ function validatePublicKey(value,expectedType) {
 
 export function enrollmentInstallCommand({publicBaseUrl,token,name,domain,email}) {
   const origin=publicHttpsOrigin(publicBaseUrl);
-  const agentDomain=normalizeAgentDomain(domain);if(!agentDomain)throw new Error('代理域名不能为空');
-  return `curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))} --domain ${shellQuote(agentDomain)} --email ${shellQuote(normalizeCertificateEmail(email))}`;
+  const agentDomain=normalizeAgentDomain(domain);
+  const base=`curl -fsSL ${origin}/agent-install.sh | sudo sh -s -- --panel ${shellQuote(origin)} --token ${shellQuote(token)} --name ${shellQuote(safeName(name))}`;
+  // No domain means IP reverse-proxy mode: the machine serves Emby over its public IP on plain HTTP,
+  // so no certificate (and therefore no certificate email) is required.
+  if(!agentDomain)return `${base} --mode ip`;
+  return `${base} --domain ${shellQuote(agentDomain)} --email ${shellQuote(normalizeCertificateEmail(email))}`;
 }
 
 function canonicalQuery(url) {
@@ -187,11 +194,11 @@ export class AgentApi {
       }
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/check-in'){
         const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
-        const agent=verified.agent,at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.agentVersion=String(parsed.agentVersion||agent.agentVersion||'unknown').slice(0,32);agent.applyState=['active','waiting','error'].includes(parsed.applyState)?parsed.applyState:'waiting';agent.proxyHealthy=parsed.proxyHealthy===true;agent.appliedRevision=Number.isSafeInteger(parsed.currentRevision)?Math.max(0,parsed.currentRevision):Number(agent.appliedRevision||0);agent.capabilities=cleanCapabilities(parsed.capabilities);agent.reportedDomain=normalizeAgentDomain(parsed.domain||'');if(parsed.domainStatus&&typeof parsed.domainStatus==='object'){const d=parsed.domainStatus;agent.domainStatus={requestId:String(d.requestId||'').slice(0,80),state:['pending','applying','active','failed'].includes(d.state)?d.state:'failed',desiredDomain:normalizeAgentDomain(d.desiredDomain||''),currentDomain:normalizeAgentDomain(d.currentDomain||''),message:String(d.message||'').slice(0,500),updatedAt:String(d.updatedAt||'').slice(0,40)};if(agent.domainStatus.state==='active'&&agent.domainStatus.currentDomain){agent.domain=agent.domainStatus.currentDomain;if(agent.desiredDomain===agent.domain)delete agent.desiredDomain;}}else if(agent.reportedDomain&&!agent.desiredDomain)agent.domain=agent.reportedDomain;
+        const agent=verified.agent,at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.agentVersion=String(parsed.agentVersion||agent.agentVersion||'unknown').slice(0,32);agent.applyState=['active','waiting','error'].includes(parsed.applyState)?parsed.applyState:'waiting';agent.proxyHealthy=parsed.proxyHealthy===true;agent.appliedRevision=Number.isSafeInteger(parsed.currentRevision)?Math.max(0,parsed.currentRevision):Number(agent.appliedRevision||0);agent.capabilities=cleanCapabilities(parsed.capabilities);agent.reportedDomain=normalizeAgentDomain(parsed.domain||'');agent.proxyMode=cleanProxyMode(parsed.proxyMode)||agent.proxyMode||(agent.domain?'domain':'ip');if(parsed.domainStatus&&typeof parsed.domainStatus==='object'){const d=parsed.domainStatus,mode=cleanProxyMode(d.mode)||'domain';agent.domainStatus={requestId:String(d.requestId||'').slice(0,80),state:['pending','applying','active','failed'].includes(d.state)?d.state:'failed',mode,desiredDomain:normalizeAgentDomain(d.desiredDomain||''),currentDomain:normalizeAgentDomain(d.currentDomain||''),message:String(d.message||'').slice(0,500),updatedAt:String(d.updatedAt||'').slice(0,40)};if(agent.domainStatus.state==='active'){agent.proxyMode=mode;agent.domain=agent.domainStatus.currentDomain||(mode==='ip'?agent.reportedDomain:agent.domain)||'';if(mode==='ip'){if(agent.desiredMode==='ip')delete agent.desiredMode;}else if(agent.desiredDomain===agent.domain){delete agent.desiredDomain;delete agent.desiredMode;}}}else if(agent.reportedDomain&&!agent.desiredDomain&&!agent.desiredMode)agent.domain=agent.reportedDomain;
         if(parsed.telemetry!==undefined){const telemetry=sanitizeTelemetry(parsed.telemetry);if(!telemetry)throw Object.assign(new Error('invalid agent telemetry'),{status:400,nonce:requestNonce});agent.telemetry=telemetry;agent.lastTelemetryAt=at;}
         // Heartbeat state is disposable; the panel's periodic flush persists it. Writing the whole
         // encrypted store synchronously on every check-in stalled the event loop serving playback.
-        const snapshot=this.desired(agent);delete agent.error;return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:30,agentVersion:this.version,desiredDomain:agent.desiredDomain||'',certificateEmail:this.store.data.settings?.certificateEmail||''},requestNonce);
+        const snapshot=this.desired(agent);delete agent.error;return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:30,agentVersion:this.version,desiredDomain:agent.desiredDomain||'',desiredMode:agent.desiredMode||'',certificateEmail:this.store.data.settings?.certificateEmail||''},requestNonce);
       }
       if(req.method==='GET'&&url.pathname==='/api/agent/v1/config'){
         const {raw}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;

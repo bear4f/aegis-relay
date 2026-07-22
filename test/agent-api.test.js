@@ -33,6 +33,15 @@ test('install command uses the HTTPS panel origin, global certificate email and 
   assert.throws(()=>enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'x',name:'HK',domain:'hk.example.com'}),/统一证书邮箱/);
 });
 
+test('an enrollment without a domain produces an IP reverse-proxy install command',()=>{
+  const command=enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'tok',name:'HK 01'});
+  assert.match(command,/--mode ip/);
+  assert.doesNotMatch(command,/--domain/);
+  assert.doesNotMatch(command,/--email/);
+  // No certificate email is required for IP mode.
+  assert.equal(typeof enrollmentInstallCommand({publicBaseUrl:'https://panel.example.com',token:'tok',name:'HK 01',domain:''}),'string');
+});
+
 test('agent and panel signature inputs are fixed LF-delimited protocol strings',()=>{
   assert.equal(agentRequestInput({method:'post',path:'/api/agent/v1/check-in',agentId:'a',timestamp:1,nonce:'n',contentHash:'h'}),'AegisRelay-Agent-Request-v1\nPOST\n/api/agent/v1/check-in\na\n1\nn\nh');
   assert.equal(panelResponseInput({status:200,requestNonce:'n',timestamp:2,contentHash:'h'}),'AegisRelay-Panel-Response-v1\n200\nn\n2\nh');
@@ -78,4 +87,27 @@ test('enrollment endpoint rate-limits repeated attempts from one address',async(
   const another=response();
   await api.handle(request('/api/agent/v1/enroll',bad,{'content-type':'application/json'}),another);
   assert.equal(another.status,429);
+});
+
+test('panel drives an agent from domain to IP mode and clears the desire when the agent reports it',async()=>{
+  const data={routes:[],agents:[],deployments:[],enrollmentTokens:[],controlPlane:{},settings:{}},store={data,save(){},audit(){}};
+  const api=new AgentApi({store,version:'0.8.0'}),sign=crypto.generateKeyPairSync('ed25519'),box=crypto.generateKeyPairSync('x25519');
+  const issued=issueEnrollment(data,{name:'HK 01',domain:'hk.example.com'});
+  const enrollBody=JSON.stringify({protocolVersion:1,requestNonce:'enroll-ipmode-nonce-000',token:issued.token,agent:{signPublicKey:publicDer(sign.publicKey),boxPublicKey:publicDer(box.publicKey),agentVersion:'0.8.0',capabilities:['proxy-v1']},machine:{hostname:'hk'}}),enrollResponse=response();
+  await api.handle(request('/api/agent/v1/enroll',enrollBody,{'content-type':'application/json'}),enrollResponse);
+  const enrolled=JSON.parse(enrollResponse.raw),agent=data.agents[0];
+  // Panel operator switches this machine to IP reverse-proxy mode.
+  agent.desiredMode='ip';agent.domain='hk.example.com';agent.proxyMode='domain';
+  // 1) A plain check-in (agent has not switched yet) must carry the desiredMode so the agent acts.
+  const b1=Buffer.from(JSON.stringify({agentVersion:'0.8.0',currentRevision:0,applyState:'active',proxyHealthy:true,domain:'hk.example.com',proxyMode:'domain'})),p1='/api/agent/v1/check-in',r1=response();
+  await api.handle(request(p1,b1,signedHeaders({method:'POST',path:p1,agentId:enrolled.agentId,privateKey:sign.privateKey,body:b1,nonce:'ip-checkin-nonce-0000001'})),r1);
+  assert.equal(r1.status,200);assert.equal(JSON.parse(r1.raw).desiredMode,'ip');
+  // 2) The agent's host unit switched and reports an active IP-mode domainStatus.
+  const b2=Buffer.from(JSON.stringify({agentVersion:'0.8.0',currentRevision:0,applyState:'active',proxyHealthy:true,domain:'203.0.113.9',proxyMode:'ip',domainStatus:{requestId:'r',state:'active',mode:'ip',currentDomain:'203.0.113.9',message:'已切换为 IP 反代（HTTP）',updatedAt:new Date().toISOString()}})),r2=response();
+  await api.handle(request(p1,b2,signedHeaders({method:'POST',path:p1,agentId:enrolled.agentId,privateKey:sign.privateKey,body:b2,nonce:'ip-checkin-nonce-0000002'})),r2);
+  assert.equal(r2.status,200);
+  assert.equal(agent.domain,'203.0.113.9');
+  assert.equal(agent.proxyMode,'ip');
+  assert.equal(agent.desiredMode,undefined,'panel stops re-pushing once the agent confirms IP mode');
+  assert.equal(JSON.parse(r2.raw).desiredMode,'');
 });

@@ -9,7 +9,12 @@ case "$ACTION" in
   update) exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)";;
   domain)
     [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay-agent domain relay.example.com admin@example.com" >&2; exit 1; }
-    exec "$INSTALL_DIR/agent-configure-domain.sh" "$2" "$3"
+    "$INSTALL_DIR/agent-configure-domain.sh" "$2" "$3"
+    cd "$INSTALL_DIR"; compose up -d --force-recreate
+    ;;
+  ip)
+    "$INSTALL_DIR/agent-configure-ip.sh"
+    cd "$INSTALL_DIR"; compose up -d --force-recreate
     ;;
   uninstall)
     cd "$INSTALL_DIR"; compose down
@@ -18,5 +23,5 @@ case "$ACTION" in
     rm -f -- /usr/local/bin/aegis-relay-agent
     echo "Agent 已卸载；TLS 证书未删除，控制面中的机器记录会保持失联，需由管理员手动删除。"
     ;;
-  *) echo "用法: aegis-relay-agent {status|logs|update|domain DOMAIN EMAIL|uninstall}" >&2; exit 1;;
+  *) echo "用法: aegis-relay-agent {status|logs|update|domain DOMAIN EMAIL|ip|uninstall}" >&2; exit 1;;
 esac

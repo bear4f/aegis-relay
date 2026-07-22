@@ -3,7 +3,7 @@ set -eu
 umask 077
 INSTALL_DIR=/opt/aegis-relay-agent
 REPO=bear4f/aegis-relay
-PANEL= TOKEN= NAME= DOMAIN= EMAIL=
+PANEL= TOKEN= NAME= DOMAIN= EMAIL= MODE=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --panel) PANEL=${2:-}; shift 2;;
@@ -11,9 +11,12 @@ while [ "$#" -gt 0 ]; do
     --name) NAME=${2:-}; shift 2;;
     --domain) DOMAIN=${2:-}; shift 2;;
     --email) EMAIL=${2:-}; shift 2;;
+    --mode) MODE=${2:-}; shift 2;;
     *) echo "未知参数: $1" >&2; exit 2;;
   esac
 done
+# No domain means IP reverse-proxy mode: serve Emby over the machine's public IP on plain HTTP.
+[ -n "$DOMAIN" ] || MODE=ip
 [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行安装命令" >&2; exit 1; }
 case "$PANEL" in https://*) ;; *) echo "面板地址必须使用 HTTPS" >&2; exit 1;; esac
 [ -n "$TOKEN" ] && [ -n "$NAME" ] || { echo "注册参数不完整" >&2; exit 1; }
@@ -61,6 +64,7 @@ chmod 600 .env
 if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml up -d; else docker-compose -f compose.agent.yml up -d; fi
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
 install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DIR/agent-configure-domain.sh"
+install -m 0755 "$TMP_DIR/source/scripts/agent-configure-ip.sh" "$INSTALL_DIR/agent-configure-ip.sh"
 install -m 0755 "$TMP_DIR/source/scripts/agent-host-domain-apply.sh" "$INSTALL_DIR/agent-host-domain-apply.sh"
 # The agent container is unprivileged, so a narrowly scoped host unit performs domain switches for it.
 if command -v systemctl >/dev/null 2>&1; then
@@ -87,11 +91,20 @@ EOF
   systemctl daemon-reload
   systemctl enable --now aegis-relay-agent-domain.path
 fi
-if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
+compose_up(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
+if [ "$MODE" = ip ]; then
+  # IP 反代模式：配置明文 HTTP 入口，再重建容器以读取新写入的 AGENT_PROXY_MODE / AGENT_PROXY_IP。
+  if "$INSTALL_DIR/agent-configure-ip.sh"; then
+    compose_up up -d --force-recreate
+    echo "Agent 已同步，IP 反代模式已就绪。之后可在面板填写域名切换到 HTTPS。"
+  else
+    echo "Agent 已同步并监听 127.0.0.1:8080，但 IP 反代配置未完成。可执行: sudo aegis-relay-agent ip" >&2
+  fi
+elif [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
   if ! "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL"; then
     echo "Agent 已同步并监听 127.0.0.1:8080，但域名证书配置未完成。修复 DNS 后执行: sudo aegis-relay-agent domain $DOMAIN $EMAIL" >&2
   fi
 else
-  echo "Agent 已同步并监听 127.0.0.1:8080。配置 HTTPS: sudo aegis-relay-agent domain 域名 邮箱"
+  echo "Agent 已同步并监听 127.0.0.1:8080。配置 HTTPS: sudo aegis-relay-agent domain 域名 邮箱，或 IP 反代: sudo aegis-relay-agent ip"
 fi
 echo "卸载命令: sudo aegis-relay-agent uninstall"
