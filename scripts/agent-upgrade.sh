@@ -14,6 +14,7 @@ cp "$TMP_DIR/source/Dockerfile.agent" "$TMP_DIR/source/compose.agent.yml" "$TMP_
 rm -rf "$INSTALL_DIR/src"; cp -a "$TMP_DIR/source/src" "$INSTALL_DIR/src"
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
 install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DIR/agent-configure-domain.sh"
+install -m 0755 "$TMP_DIR/source/scripts/agent-configure-ip.sh" "$INSTALL_DIR/agent-configure-ip.sh"
 set_env(){ KEY=$1 VALUE=$2 FILE="$INSTALL_DIR/.env" TMP="$INSTALL_DIR/.env.tmp"; awk -v key="$KEY" -v value="$VALUE" 'BEGIN{done=0} $0 ~ "^"key"=" {print key"="value;done=1;next} {print} END{if(!done)print key"="value}' "$FILE" > "$TMP"; chmod 600 "$TMP"; mv "$TMP" "$FILE"; }
 SOURCE_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP_DIR/source/package.json" | head -n1)
 set_env AGENT_VERSION "$SOURCE_VERSION"
@@ -49,4 +50,13 @@ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.
 echo "Agent 已升级到 $SOURCE_VERSION，原注册身份、本地快照和流量统计已保留。"
 DOMAIN=$(sed -n 's/^AGENT_DOMAIN=//p' "$INSTALL_DIR/.env" | head -n1)
 EMAIL=$(sed -n 's/^AGENT_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
-if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL" || true; else echo "若尚未配置 HTTPS，请执行: sudo aegis-relay-agent domain $DOMAIN 你的邮箱"; fi
+MODE=$(sed -n 's/^AGENT_PROXY_MODE=//p' "$INSTALL_DIR/.env" | head -n1)
+# Re-assert whichever入口 this machine already uses so Nginx stays consistent with the new build;
+# both configure scripts are idempotent. env-persisted mode/domain means the入口 survives upgrades.
+if [ "$MODE" = ip ]; then
+  "$INSTALL_DIR/agent-configure-ip.sh" || true
+elif [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
+  "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL" || true
+else
+  echo "若尚未配置入口，请执行 HTTPS: sudo aegis-relay-agent domain 域名 邮箱，或 IP 反代: sudo aegis-relay-agent ip"
+fi
