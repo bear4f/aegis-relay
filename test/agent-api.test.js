@@ -61,3 +61,21 @@ test('selected routes flow through encrypted config pull and applied ACK',async(
   const snapshot=openAgentSnapshot({envelope:JSON.parse(configResponse.raw),identity:{agentId:enrolled.agentId,boxPrivateKey:box.privateKey.export({format:'der',type:'pkcs8'}).toString('base64url'),panelKeyId:enrolled.panelKeyId,panelSigningPublicKey:enrolled.panelSigningPublicKey}});assert.equal(snapshot.revision,1);assert.deepEqual(snapshot.nodes.map(node=>node.alias),['alpha']);
   const ackPath='/api/agent/v1/ack',ackBody=Buffer.from(JSON.stringify({revision:snapshot.revision,hash:snapshot.hash,status:'applied',proxyHealthy:true})),ackResponse=response();await api.handle(request(ackPath,ackBody,signedHeaders({method:'POST',path:ackPath,agentId:enrolled.agentId,privateKey:sign.privateKey,body:ackBody,nonce:'config-acknowledge-01'})),ackResponse);assert.equal(ackResponse.status,200);assert.equal(data.agents[0].appliedRevision,1);assert.equal(data.agents[0].applyState,'active');
 });
+
+test('enrollment endpoint rate-limits repeated attempts from one address',async()=>{
+  const data={routes:[],agents:[],deployments:[],enrollmentTokens:[],controlPlane:{}},store={data,save(){},audit(){}};
+  const api=new AgentApi({store,version:'0.8.0'});
+  const bad=JSON.stringify({protocolVersion:1,requestNonce:'limit-check',token:'guess'});
+  let limited=null;
+  for(let i=0;i<20;i++){
+    const res=response();
+    await api.handle(request('/api/agent/v1/enroll',bad,{'content-type':'application/json'}),res);
+    if(res.status===429){limited=res;break}
+    assert.equal(res.status,401);
+  }
+  assert.ok(limited,'expected a 429 before 20 attempts');
+  assert.match(limited.raw.toString(),/too many enrollment attempts/);
+  const another=response();
+  await api.handle(request('/api/agent/v1/enroll',bad,{'content-type':'application/json'}),another);
+  assert.equal(another.status,429);
+});

@@ -72,9 +72,27 @@ export function cleanAlias(v) {
 }
 
 export class RateLimiter {
-  constructor(limit = 5, windowMs = 60000) { this.limit = limit; this.windowMs = windowMs; this.map = new Map(); }
+  constructor(limit = 5, windowMs = 60000, maxKeys = 4096) { this.limit = limit; this.windowMs = windowMs; this.maxKeys = maxKeys; this.map = new Map(); }
   take(key, now = Date.now()) {
+    // Keys are attacker-controlled (one per client IP), so the table must stay bounded: sweep
+    // expired windows first, then drop the oldest entries rather than growing without limit.
+    if (this.map.size >= this.maxKeys) {
+      for (const [k, v] of this.map) if (now - v.start >= this.windowMs) this.map.delete(k);
+      for (const [k] of this.map) { if (this.map.size < this.maxKeys) break; this.map.delete(k); }
+    }
     const cur = this.map.get(key); if (!cur || now - cur.start >= this.windowMs) { this.map.set(key, { start: now, count: 1 }); return true; }
     cur.count++; return cur.count <= this.limit;
   }
+}
+
+// The panel refuses X-Forwarded-For from clients, but our own Nginx on the same host sets
+// X-Real-IP. Trust that single hop only when the TCP peer really is loopback — otherwise every
+// login shares one 127.0.0.1 rate-limit bucket and audit rows never show the actual client.
+export function requestIp(req) {
+  const remote = String(req.socket?.remoteAddress || 'unknown').replace(/^::ffff:/, '');
+  if (remote === '127.0.0.1' || remote === '::1') {
+    const real = String(req.headers?.['x-real-ip'] || '').trim().replace(/^::ffff:/, '');
+    if (net.isIP(real)) return real;
+  }
+  return remote;
 }

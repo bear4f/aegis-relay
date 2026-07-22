@@ -13,6 +13,9 @@ services:
     volumes:
       - ./data:/app/data
     env_file: .env
+    environment:
+      # V8 sizes its heap off host RAM by default; cap it so the panel stays small on shared VPSes.
+      NODE_OPTIONS: --max-old-space-size=${PANEL_MAX_HEAP_MB:-256}
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9080/'+process.env.ADMIN_PATH+'/api/status').then(r=>{if(!r.ok)process.exit(1)})"]

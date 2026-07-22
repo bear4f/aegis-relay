@@ -51,6 +51,8 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection \$aegis_connection_upgrade;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Real-IP \$remote_addr;
         proxy_request_buffering off;
         proxy_buffering off;
         proxy_read_timeout 3600s;

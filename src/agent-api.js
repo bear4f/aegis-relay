@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { b64u, randomToken, timingEqual } from './security.js';
+import { b64u, randomToken, RateLimiter, requestIp, timingEqual } from './security.js';
 import { ensurePanelSigningIdentity } from './snapshot.js';
 import { compileAgentDesiredSnapshot } from './snapshot.js';
 import { normalizeAgentDomain, replaceAgentDeployments } from './agent-registry.js';
@@ -116,6 +116,9 @@ function baseHeaders(extra={}) { return {'cache-control':'no-store','content-typ
 export class AgentApi {
   constructor({store,version='0.0.0'}) {
     this.store=store;this.version=version;this.panelIdentity=ensurePanelSigningIdentity(store);this.nonces=new Map();
+    // Enrollment is the only unauthenticated agent endpoint. Tokens are 32-byte digests so guessing
+    // is hopeless, but without a limiter the endpoint is still free CPU and audit-log spam.
+    this.enrollLimiter=new RateLimiter(12,10*60_000);
     // Control-plane work must never stall the media data plane, so desired snapshots are compiled
     // once per configuration epoch instead of on every heartbeat, and pollers park on a long poll.
     this.epoch=1;this.cache=new Map();this.waiters=new Set();
@@ -175,10 +178,11 @@ export class AgentApi {
     const url=new URL(req.url,'http://agent.invalid');let requestNonce='error';
     try{
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/enroll'){
+        if(!this.enrollLimiter.take(requestIp(req)))throw Object.assign(new Error('too many enrollment attempts, try again later'),{status:429});
         const {parsed}=await readBody(req),agentInput=parsed.agent||{};requestNonce=String(parsed.requestNonce||'enroll');
         if(parsed.protocolVersion!==AGENT_PROTOCOL_VERSION)throw Object.assign(new Error('unsupported protocol version'),{status:400});
         const agent=consumeEnrollment(this.store.data,parsed.token, {...agentInput,machine:parsed.machine});
-        this.store.audit('agent.enrolled',req.socket.remoteAddress||'unknown',agent.id);
+        this.store.audit('agent.enrolled',requestIp(req),agent.id);
         return this.send(res,201,{protocolVersion:AGENT_PROTOCOL_VERSION,agentId:agent.id,panelKeyId:this.panelIdentity.keyId,panelSigningPublicKey:this.panelIdentity.publicKey,serverTime:nowSeconds(),poll:{path:'/api/agent/v1/config',maxWaitSeconds:25,heartbeatSeconds:30}},requestNonce);
       }
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/check-in'){
@@ -215,7 +219,7 @@ export class AgentApi {
         if(!Number.isSafeInteger(revision)||revision<1||!['applied','rejected'].includes(status))throw Object.assign(new Error('invalid config acknowledgement'),{status:400,nonce:requestNonce});
         if(revision!==Number(agent.desiredRevision)||!timingEqual(parsed.hash||'',agent.desiredHash||''))throw Object.assign(new Error('config acknowledgement does not match desired revision'),{status:409,nonce:requestNonce});
         const at=new Date().toISOString();agent.lastSeen=at;agent.updatedAt=at;agent.lastAck={revision,hash:parsed.hash,status,at,error:String(parsed.error||'').slice(0,240)};agent.applyState=status==='applied'?'active':'error';agent.proxyHealthy=parsed.proxyHealthy===true;if(status==='applied'){agent.appliedRevision=revision;agent.appliedHash=parsed.hash;delete agent.error;}else agent.error=agent.lastAck.error||'配置被 Agent 拒绝';
-        this.store.audit(`agent.config_${status}`,req.socket.remoteAddress||'unknown',`${agent.id} revision ${revision}`);return this.send(res,200,{ok:true,revision},requestNonce);
+        this.store.audit(`agent.config_${status}`,requestIp(req),`${agent.id} revision ${revision}`);return this.send(res,200,{ok:true,revision},requestNonce);
       }
       throw Object.assign(new Error('not found'),{status:404});
     }catch(error){return this.reject(res,error,error.nonce||requestNonce);}

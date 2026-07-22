@@ -47,6 +47,9 @@ export class Metrics {
     const items=routes.map(r=>{const s=this.route(r);return{id:r.id,alias:r.alias,name:r.name,enabled:r.enabled,active:this.active.get(r.id||r.alias)||0,...s,quotaBytes:Number(r.monthlyQuotaGB||0)*1024**3,speedLimitMbps:Number(r.speedLimitMbps||0)}});
     return { startedAt:this.store.data.metrics.startedAt, totalRequests:items.reduce((n,x)=>n+x.requests,0), totalBytes:items.reduce((n,x)=>n+x.bytesOut,0), active:items.reduce((n,x)=>n+x.active,0), running:routes.filter(r=>r.enabled).length, nodes:items, daily:this.store.data.metrics.daily };
   }
+  // Counters for a deleted node are dead weight in memory and in every encrypted store write.
+  drop(routeId){delete this.store.data.metrics.routes[routeId];this.active.delete(routeId)}
+  retainOnly(routeIds){const keep=new Set(routeIds);for(const id of Object.keys(this.store.data.metrics.routes))if(!keep.has(id))this.drop(id)}
   subscribe(fn){this.listeners.add(fn);return()=>this.listeners.delete(fn)}
   emit(){for(const fn of this.listeners)fn()}
 }

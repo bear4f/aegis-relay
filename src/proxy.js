@@ -14,7 +14,7 @@ const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 const runtime = new Map();
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
-const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:256, maxFreeSockets:64, timeout:75_000, scheduling:'lifo' };
+const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:256, maxFreeSockets:32, timeout:75_000, scheduling:'lifo' };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
 
@@ -88,6 +88,12 @@ function routeFor(req, routes, key) {
 }
 
 function stateKey(route, target) { return `${route.id || route.alias}\0${target}`; }
+// Circuit state would otherwise outlive its route forever: every delete or upstream edit left an
+// orphan entry in the map for the lifetime of the process.
+export function dropRouteRuntime(routeId) {
+  const prefix = `${routeId}\0`;
+  for (const key of runtime.keys()) if (key.startsWith(prefix)) runtime.delete(key);
+}
 function stateFor(route, target) {
   const k = stateKey(route, target);
   if (!runtime.has(k)) runtime.set(k, { failures:0, openUntil:0, lastError:'', lastSuccess:null });

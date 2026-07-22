@@ -12,6 +12,9 @@ services:
     volumes:
       - ./data:/app/agent-data
     env_file: .env
+    environment:
+      # V8 sizes its heap off host RAM by default; cap it so the agent stays small next to Emby traffic.
+      NODE_OPTIONS: --max-old-space-size=${AGENT_MAX_HEAP_MB:-192}
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/').then(r=>{if(!r.ok)process.exit(1)})"]

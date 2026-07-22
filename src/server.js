@@ -2,9 +2,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cleanAlias, deriveKey, hashPassword, newTotpSecret, randomToken, RateLimiter, tokenDigest, verifyPassword, verifyTotp, timingEqual } from './security.js';
+import { cleanAlias, deriveKey, hashPassword, newTotpSecret, randomToken, RateLimiter, requestIp, tokenDigest, verifyPassword, verifyTotp, timingEqual } from './security.js';
 import { Store } from './store.js';
-import { getRuntimeStatus, handleUpgrade, makeProxyHandler, validateUpstreamList } from './proxy.js';
+import { dropRouteRuntime, getRuntimeStatus, handleUpgrade, makeProxyHandler, validateUpstreamList } from './proxy.js';
 import { Metrics } from './metrics.js';
 import { diagnoseRoute } from './diagnostics.js';
 import { Notifier } from './notifier.js';
@@ -37,6 +37,8 @@ if(localRecord&&configuredLocalDomain&&localRecord.domain!==configuredLocalDomai
 const localAgent = new LocalAgent({store}); localAgent.start();
 const agentApi = new AgentApi({store,version:APP_VERSION});
 const metrics = new Metrics(store);
+// Stats for nodes deleted by earlier versions were never removed; sweep them once at boot.
+metrics.retainOnly(store.data.routes.map(route=>route.id||route.alias));
 const notifier = new Notifier(store,metrics);
 const sessions = store.data.sessions && typeof store.data.sessions === 'object' && !Array.isArray(store.data.sessions) ? store.data.sessions : {};
 store.data.sessions = sessions;
@@ -52,7 +54,7 @@ const agentUpgrader = fs.readFileSync(path.join(ROOT,'scripts','agent-upgrade.sh
 
 function headers(extra = {}) { return { 'cache-control':'no-store', 'content-security-policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'permissions-policy':'camera=(), microphone=(), geolocation=()', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff', 'x-frame-options':'DENY', ...extra }; }
 function json(res, status, body, extra = {}) { res.writeHead(status, headers({ 'content-type':'application/json; charset=utf-8', ...extra })); res.end(JSON.stringify(body)); }
-function ip(req) { return String(req.socket.remoteAddress || 'unknown').replace(/^::ffff:/, ''); }
+const ip = requestIp;
 async function body(req, limit = 32 * 1024) {
   if (!String(req.headers['content-type']).startsWith('application/json')) throw Object.assign(new Error('application/json required'), { status: 415 });
   let size = 0, chunks = []; for await (const c of req) { size += c.length; if (size > limit) throw Object.assign(new Error('request too large'), { status: 413 }); chunks.push(c); }
@@ -94,8 +96,9 @@ function dashboardSnapshot(){
 
 async function api(req, res, rel, cookiePath = cfg.adminPath) {
   if (req.method === 'GET' && rel === '/status') return json(res, 200, { initialized:!!store.data.admin, adminPath:cfg.adminPath, version:APP_VERSION });
-  // The panel icon shows on the login screen and as the favicon, both of which render before any session exists.
-  if (req.method === 'GET' && rel === '/branding') return json(res, 200, { icon:store.data.settings.panelIcon||'' });
+  // The panel icon shows on the login screen and as the favicon, both of which render before any session
+  // exists. It can be a few hundred KB, so let browsers cache it briefly instead of re-downloading per load.
+  if (req.method === 'GET' && rel === '/branding') return json(res, 200, { icon:store.data.settings.panelIcon||'' }, { 'cache-control':'private, max-age=300' });
   if (req.method === 'POST' && rel === '/setup') {
     if (store.data.admin) return json(res, 409, { error:'already initialized' });
     const b = await body(req); if (!cfg.setupToken || !timingEqual(b.setupToken || '', cfg.setupToken)) { store.audit('setup.denied', ip(req)); return json(res, 403, { error:'invalid setup token' }); }
@@ -200,7 +203,7 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
     if(req.method==='PATCH'){const b=await body(req);let switchedKey=null;if(b.accessMode!==undefined){const mode=b.accessMode==='alias_only'?'alias_only':'key';if(mode!==r.accessMode){if(mode==='alias_only'){r.accessMode='alias_only';r.keyDigest=null;r.accessKey=null;delete r.routeAuthKey;delete r.authVersion;delete r.authMigrationRequired;switchedKey='';}else{const accessKey=connectionKey(b.accessKey);r.accessMode='key';Object.assign(r,routeAuthFields(accessKey));delete r.authMigrationRequired;switchedKey=accessKey;}}}if(b.name!==undefined)r.name=String(b.name).slice(0,80);if(b.enabled!==undefined)r.enabled=b.enabled===true;if(b.tlsVerify!==undefined)r.tlsVerify=b.tlsVerify===true;if(b.showOnHome!==undefined)r.showOnHome=b.showOnHome===true;if(b.clientProfile!==undefined)r.clientProfile=cleanProfile(b.clientProfile);if(b.tags!==undefined)r.tags=cleanTags(b.tags);if(b.notes!==undefined)r.notes=String(b.notes).slice(0,500);if(b.favorite!==undefined)r.favorite=b.favorite===true;if(b.sortOrder!==undefined)r.sortOrder=numeric(b.sortOrder,-10000,10000);if(b.speedLimitMbps!==undefined)r.speedLimitMbps=numeric(b.speedLimitMbps,0,100000);if(b.monthlyQuotaGB!==undefined)r.monthlyQuotaGB=numeric(b.monthlyQuotaGB,0,1000000);if(b.reminderDays!==undefined)r.reminderDays=numeric(b.reminderDays,0,365);
       if(b.alias!==undefined){const a=checkedAlias(b.alias);if(store.data.routes.some(x=>x!==r&&x.alias===a))return json(res,409,{error:'alias already exists'});r.alias=a;}
       if(b.upstreams!==undefined||b.upstream!==undefined||b.playbackUpstreams!==undefined||b.allowPrivate!==undefined){r.allowPrivate=b.allowPrivate===undefined?r.allowPrivate:b.allowPrivate===true;r.upstreams=await validateUpstreamList(b.upstreams||b.upstream||routeUpstreams(r),r.allowPrivate);r.playbackUpstreams=String(b.playbackUpstreams??(r.playbackUpstreams||[])).trim()?await validateUpstreamList(b.playbackUpstreams??r.playbackUpstreams,r.allowPrivate):[];delete r.upstream;}r.updatedAt=new Date().toISOString();store.audit(switchedKey===null?'route.updated':'route.access_mode_changed',ip(req),r.alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,{route:publicRoute(r),...(switchedKey===null?{}:clientCredentials(r,switchedKey))});}
-    if(req.method==='DELETE'){store.data.routes=store.data.routes.filter(x=>x!==r);removeRouteDeployments(store.data,r.id);store.audit('route.deleted',ip(req),r.alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,{ok:true});}
+    if(req.method==='DELETE'){store.data.routes=store.data.routes.filter(x=>x!==r);removeRouteDeployments(store.data,r.id);metrics.drop(r.id);dropRouteRuntime(r.id);store.audit('route.deleted',ip(req),r.alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,{ok:true});}
   }
   const credentials=rel.match(/^\/routes\/([^/]+)\/credentials$/);if(credentials&&req.method==='GET'){const r=store.data.routes.find(x=>x.id===credentials[1]);if(!r)return json(res,404,{error:'not found'});store.audit('route.credentials_viewed',ip(req),r.alias);return json(res,200,{...savedCredentials(r),publicBaseUrl:clientBaseUrl()});}
   const rot=rel.match(/^\/routes\/([^/]+)\/rotate-key$/);if(rot&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===rot[1]);if(!r)return json(res,404,{error:'not found'});if(r.accessMode==='alias_only')return json(res,409,{error:'this node does not use an access key'});const b=await body(req),accessKey=connectionKey(b.accessKey),routeAuthKey=r.authVersion===ROUTE_AUTH_VERSION&&isRouteAuthKey(r.routeAuthKey)?r.routeAuthKey:newRouteAuthKey();r.authVersion=ROUTE_AUTH_VERSION;r.routeAuthKey=routeAuthKey;r.keyDigest=routeTokenDigest(accessKey,routeAuthKey);r.accessKey=accessKey;delete r.authMigrationRequired;r.updatedAt=new Date().toISOString();store.audit('route.key_rotated',ip(req),r.alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,credentialsFor(r,accessKey));}

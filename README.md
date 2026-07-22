@@ -150,7 +150,8 @@ sudo aegis-relay-agent uninstall
 - 登录限速、30 分钟会话、HttpOnly + SameSite=Strict Cookie、CSRF Token
 - CSP、禁止 iframe、禁止 referrer、关闭缓存与 MIME sniffing
 - 默认拒绝私网、环回、链路本地和保留地址回源，降低 SSRF 风险
-- 不接受用户传入的 `X-Forwarded-For`，不把管理 Cookie / CSRF 头转发给上游
+- 不信任客户端伪造的 `X-Forwarded-For` / `X-Real-IP`——仅当请求来自本机 Nginx 时采用其注入的真实来源 IP，用于按 IP 登录限速与审计；转发上游前一律移除，也不把管理 Cookie / CSRF 头转发给上游
+- Agent 注册端点按来源 IP 限速；登录、注册限速表有内存上界，无法被撑爆
 - 访问密钥不写入访问日志，审计日志自动脱敏
 - Agent 请求使用 Ed25519 签名 + nonce 防重放；面板响应同样签名
 - 容器非 root、只读文件系统、丢弃全部 capabilities、禁止提权
