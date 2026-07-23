@@ -127,22 +127,25 @@ DNS 或证书失败时不会关闭 9080 临时入口，修复后重跑即可；N
 主机：
 
 ```bash
+sudo aegis-relay             # 交互式控制台：状态/日志/更新/域名/卸载 逐项选择
 sudo aegis-relay status      # 容器状态
 sudo aegis-relay logs        # 实时日志
 sudo aegis-relay update      # 拉取最新版并重建
 sudo aegis-relay domain      # 两步确认面板域名与 Emby 反代域名（默认同域），自动申请证书
 sudo aegis-relay proxy-domain emby.example.com   # 面板执行器不可用时的手动兜底
+sudo aegis-relay uninstall   # 一键卸载面板（需输入 yes 确认；保留 TLS 证书）
 ```
 
 每台代理机器：
 
 ```bash
+sudo aegis-relay-agent             # 交互式控制台：状态/日志/更新/域名/IP/卸载 逐项选择
 sudo aegis-relay-agent status
 sudo aegis-relay-agent logs
 sudo aegis-relay-agent update      # 策略更新后每台都要跑
 sudo aegis-relay-agent domain relay.example.com admin@example.com   # 切换/配置 HTTPS 域名
 sudo aegis-relay-agent ip          # 切回本机 IP 明文 HTTP 反代（面板执行器不可用时的手动兜底）
-sudo aegis-relay-agent uninstall
+sudo aegis-relay-agent uninstall   # 一键卸载探针（需输入 yes 确认；保留 TLS 证书）
 ```
 
 > **更新策略时，主机和每台代理机都要各自更新**——数据面代码是共用的，但每台机器各自构建镜像。面板会把落后的机器标为「待升级」，照着提示逐台执行即可。

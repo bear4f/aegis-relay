@@ -1,27 +1,76 @@
 #!/bin/sh
 set -eu
 INSTALL_DIR=/opt/aegis-relay-agent
-ACTION=${1:-status}
-compose(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
+compose(){ cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
+
+do_status(){ compose ps; }
+do_logs(){ compose logs -f --tail=200; }
+do_update(){ sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)"; }
+do_domain(){ "$INSTALL_DIR/agent-configure-domain.sh" "$1" "$2"; compose up -d --force-recreate; }
+do_ip(){ "$INSTALL_DIR/agent-configure-ip.sh"; compose up -d --force-recreate; }
+do_uninstall(){
+  [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行卸载" >&2; return 1; }
+  echo "即将卸载 AegisRelay 探针，这会删除：容器、systemd 域名执行器、Nginx 站点、CLI 和 $INSTALL_DIR。" >&2
+  echo "TLS 证书(/etc/letsencrypt)会保留；控制面中的机器记录会保持失联，需在面板手动删除。" >&2
+  printf '确认卸载请输入 yes： ' >&2
+  IFS= read -r ans || ans=
+  [ "$ans" = yes ] || { echo "已取消，未做任何修改。"; return 1; }
+  compose down 2>/dev/null || true
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now aegis-relay-agent-domain.path 2>/dev/null || true
+    rm -f /etc/systemd/system/aegis-relay-agent-domain.path /etc/systemd/system/aegis-relay-agent-domain.service
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  if [ -e /etc/nginx/sites-enabled/aegis-relay-agent.conf ]; then
+    rm -f /etc/nginx/sites-enabled/aegis-relay-agent.conf
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
+  fi
+  cd /; rm -rf -- "$INSTALL_DIR"
+  rm -f -- /usr/local/bin/aegis-relay-agent
+  echo "AegisRelay 探针已卸载。请到面板「代理机器」手动删除这台失联记录。"
+}
+
+menu(){
+  [ "$(id -u)" -eq 0 ] || echo "提示：更新、配置域名/IP、卸载等操作需要 sudo 权限。"
+  set +e
+  while :; do
+    echo
+    echo "==== AegisRelay 探针控制台 ===="
+    echo "  1) 查看容器状态"
+    echo "  2) 查看实时日志（Ctrl-C 返回）"
+    echo "  3) 更新探针到最新版"
+    echo "  4) 配置 / 切换 HTTPS 域名"
+    echo "  5) 切换为本机 IP 反代（HTTP）"
+    echo "  6) 卸载探针"
+    echo "  0) 退出"
+    printf '请选择: '
+    IFS= read -r choice || exit 0
+    case "$choice" in
+      1) do_status;;
+      2) do_logs;;
+      3) do_update;;
+      4) printf '域名: '; IFS= read -r d || d=; printf '证书邮箱: '; IFS= read -r e || e=; if [ -n "$d" ] && [ -n "$e" ]; then do_domain "$d" "$e"; else echo "已取消。"; fi;;
+      5) do_ip;;
+      6) do_uninstall && exit 0;;
+      0) exit 0;;
+      *) echo "无效选择，请输入 0-6。";;
+    esac
+  done
+}
+
+ACTION=${1:-menu}
 case "$ACTION" in
-  status) cd "$INSTALL_DIR"; compose ps;;
-  logs) cd "$INSTALL_DIR"; compose logs -f --tail=200;;
-  update) exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)";;
+  status) do_status;;
+  logs) do_logs;;
+  update) do_update;;
   domain)
     [ "$#" -eq 3 ] || { echo "用法: sudo aegis-relay-agent domain relay.example.com admin@example.com" >&2; exit 1; }
-    "$INSTALL_DIR/agent-configure-domain.sh" "$2" "$3"
-    cd "$INSTALL_DIR"; compose up -d --force-recreate
+    do_domain "$2" "$3"
     ;;
-  ip)
-    "$INSTALL_DIR/agent-configure-ip.sh"
-    cd "$INSTALL_DIR"; compose up -d --force-recreate
+  ip) do_ip;;
+  uninstall) do_uninstall;;
+  menu)
+    if [ -t 0 ] && [ -t 1 ]; then menu; else do_status; fi
     ;;
-  uninstall)
-    cd "$INSTALL_DIR"; compose down
-    if [ -e /etc/nginx/sites-enabled/aegis-relay-agent.conf ]; then rm -f /etc/nginx/sites-enabled/aegis-relay-agent.conf; nginx -t && systemctl reload nginx || true; fi
-    cd /; rm -rf -- "$INSTALL_DIR"
-    rm -f -- /usr/local/bin/aegis-relay-agent
-    echo "Agent 已卸载；TLS 证书未删除，控制面中的机器记录会保持失联，需由管理员手动删除。"
-    ;;
-  *) echo "用法: aegis-relay-agent {status|logs|update|domain DOMAIN EMAIL|ip|uninstall}" >&2; exit 1;;
+  *) echo "用法: aegis-relay-agent {menu|status|logs|update|domain DOMAIN EMAIL|ip|uninstall}" >&2; exit 1;;
 esac

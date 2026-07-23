@@ -1,29 +1,93 @@
 #!/bin/sh
 set -eu
 INSTALL_DIR="/opt/aegis-relay"
-ACTION=${1:-status}
+compose(){ cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi; }
+
+do_status(){ compose ps; }
+do_logs(){ compose logs -f --tail=200; }
+do_update(){ sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh)"; }
+do_domain(){ "$INSTALL_DIR/scripts/domain-wizard.sh" "$@"; }
+do_proxy_domain(){
+  EMAIL=$(sed -n 's/^CERTIFICATE_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
+  [ -n "$EMAIL" ] || { echo "请先在部署向导保存证书邮箱，或执行 aegis-relay domain" >&2; return 1; }
+  "$INSTALL_DIR/scripts/configure-local-domain.sh" "$1" "$EMAIL"
+}
+do_uninstall(){
+  [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行卸载" >&2; return 1; }
+  echo "即将卸载 AegisRelay 面板，这会删除：" >&2
+  echo "  - Docker 容器" >&2
+  echo "  - systemd 域名切换执行器" >&2
+  echo "  - Nginx 站点 aegis-relay.conf" >&2
+  echo "  - CLI /usr/local/bin/aegis-relay" >&2
+  echo "  - $INSTALL_DIR（含 data/ 数据和 .env 主密钥，删除后不可恢复！）" >&2
+  echo "TLS 证书(/etc/letsencrypt)与云安全组规则不会改动。" >&2
+  printf '确认卸载请输入 yes： ' >&2
+  IFS= read -r ans || ans=
+  [ "$ans" = yes ] || { echo "已取消，未做任何修改。"; return 1; }
+  compose down 2>/dev/null || true
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now aegis-relay-domain.path 2>/dev/null || true
+    rm -f /etc/systemd/system/aegis-relay-domain.path /etc/systemd/system/aegis-relay-domain.service
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  if [ -e /etc/nginx/sites-enabled/aegis-relay.conf ]; then
+    rm -f /etc/nginx/sites-enabled/aegis-relay.conf
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
+  fi
+  cd /; rm -rf -- "$INSTALL_DIR"
+  rm -f -- /usr/local/bin/aegis-relay
+  echo "AegisRelay 面板已卸载。TLS 证书(/etc/letsencrypt)已保留，如不再使用可手动删除。"
+}
+
+menu(){
+  [ "$(id -u)" -eq 0 ] || echo "提示：更新、切换域名、卸载等操作需要 sudo 权限。"
+  # A single failed action must not tear down the whole menu, so relax errexit inside the loop.
+  set +e
+  while :; do
+    echo
+    echo "==== AegisRelay 面板控制台 ===="
+    echo "  1) 查看容器状态"
+    echo "  2) 查看实时日志（Ctrl-C 返回）"
+    echo "  3) 更新面板到最新版"
+    echo "  4) 配置 / 切换域名（面板 + Emby 反代，两步确认）"
+    echo "  5) 单独切换本机 Emby 反代域名"
+    echo "  6) 卸载面板"
+    echo "  0) 退出"
+    printf '请选择: '
+    IFS= read -r choice || exit 0
+    case "$choice" in
+      1) do_status;;
+      2) do_logs;;
+      3) do_update;;
+      4) do_domain;;
+      5) printf '输入 Emby 反代域名: '; IFS= read -r d || d=; if [ -n "$d" ]; then do_proxy_domain "$d"; else echo "已取消。"; fi;;
+      6) do_uninstall && exit 0;;
+      0) exit 0;;
+      *) echo "无效选择，请输入 0-6。";;
+    esac
+  done
+}
+
+ACTION=${1:-menu}
 case "$ACTION" in
+  status) do_status;;
+  logs) do_logs;;
+  update) do_update;;
   domain)
     shift
     case "$#" in
-      0|2|3) exec "$INSTALL_DIR/scripts/domain-wizard.sh" "$@";;
+      0|2|3) do_domain "$@";;
       *) echo "用法: sudo aegis-relay domain [panel.example.com admin@example.com [emby.example.com]]" >&2; exit 1;;
     esac
     ;;
   proxy-domain)
     [ "$#" -eq 2 ] || { echo "用法: sudo aegis-relay proxy-domain emby.example.com" >&2; exit 1; }
-    EMAIL=$(sed -n 's/^CERTIFICATE_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
-    [ -n "$EMAIL" ] || { echo "请先在部署向导保存证书邮箱，或执行 aegis-relay domain" >&2; exit 1; }
-    exec "$INSTALL_DIR/scripts/configure-local-domain.sh" "$2" "$EMAIL"
+    do_proxy_domain "$2"
     ;;
-  update)
-    exec sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/bootstrap.sh)"
+  uninstall) do_uninstall;;
+  menu)
+    # No arguments opens the interactive console when attached to a terminal; otherwise show status.
+    if [ -t 0 ] && [ -t 1 ]; then menu; else do_status; fi
     ;;
-  logs)
-    cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then exec docker compose logs -f --tail=200; else exec docker-compose logs -f --tail=200; fi
-    ;;
-  status)
-    cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then docker compose ps; else docker-compose ps; fi
-    ;;
-  *) echo "用法: aegis-relay {status|logs|update|domain [PANEL EMAIL [PROXY]]|proxy-domain DOMAIN}" >&2; exit 1;;
+  *) echo "用法: aegis-relay {menu|status|logs|update|domain [PANEL EMAIL [PROXY]]|proxy-domain DOMAIN|uninstall}" >&2; exit 1;;
 esac
