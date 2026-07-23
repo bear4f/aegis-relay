@@ -247,8 +247,8 @@ const proxy=http.createServer((req,res)=>{
   try{const role=domainRequestRole({panelHostname,proxyHostname,requestHostname:requestHostname(req)});if(role==='reject')return json(res,421,{error:'misdirected request'});if(role==='proxy'){const out=relay(req,res);if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err));return}if(pathname==='/agent-install.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentInstaller)}if(pathname==='/agent-upgrade.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentUpgrader)}const out=pathname.startsWith('/api/agent/v1/')?agentApi.handle(req,res):(isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):(role==='control'?json(res,404,{error:'not found'}):relay(req,res)));if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}
   catch(err){relayFailed(res,err)}
 });
-proxy.requestTimeout=0;proxy.headersTimeout=15_000;
-proxy.on('connection',socket=>socket.setNoDelay(true));
+proxy.requestTimeout=0;proxy.keepAliveTimeout=75_000;proxy.keepAliveTimeoutBuffer=5_000;proxy.headersTimeout=80_000;
+proxy.on('connection',socket=>{socket.setNoDelay(true);socket.setKeepAlive(true,15_000)});
 proxy.on('clientError',(err,socket)=>{if(!socket.destroyed)socket.destroy()});
 proxy.on('upgrade',(req,socket,head)=>{socket.on('error',()=>socket.destroy());try{if(splitDomains&&requestHostname(req)!==proxyHostname)return socket.destroy();handleUpgrade(req,socket,head,localAgent.routeSource,key)}catch(err){console.error('[aegis] upgrade error',err&&err.stack||err);socket.destroy()}});
 proxy.listen(cfg.proxyPort,cfg.proxyHost,()=>console.log(`AegisRelay proxy listening on ${cfg.proxyHost}:${cfg.proxyPort}`));

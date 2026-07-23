@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';
-import {getRuntimeStatus,makeProxyHandler,stripAdminCredentials,stripAdminSetCookies,validateUpstream,validateUpstreamList} from '../src/proxy.js';import {deriveKey,tokenDigest} from '../src/security.js';
+import {getRuntimeStatus,makeProxyHandler,shouldRewriteStreamBody,stripAdminCredentials,stripAdminSetCookies,validateUpstream,validateUpstreamList} from '../src/proxy.js';import {deriveKey,tokenDigest} from '../src/security.js';
 import { newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from '../src/route-auth.js';
 import { AtomicRouteSource } from '../src/local-agent.js';
 const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),close=s=>new Promise(r=>{s.closeAllConnections?.();s.close(r)});
@@ -192,6 +192,23 @@ test('streaming rewrite reassembles a stream URL split across chunk boundaries',
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   const t=(await request(port,'/emu/Items/1',{headers:{host:'relay.test','x-forwarded-proto':'https'}})).body.toString();
   assert.equal(t,'{"a":"https://relay.test/emu/.aegis-vod/https/vod.example.net/movie.mp4","b":"keep"}');
+  await close(relay);await close(upstream);
+});
+
+test('rewrite classification keeps 200 playback bytes zero-copy even when the origin labels them as text or JSON',()=>{
+  for(const contentType of ['text/plain','application/json'])assert.equal(shouldRewriteStreamBody({method:'GET',status:200,headers:{'content-type':contentType},playback:true,pathname:'/Videos/1/stream.mp4'}),false);
+  assert.equal(shouldRewriteStreamBody({method:'GET',status:200,headers:{'content-type':'application/json'},playback:false,pathname:'/Items/1/PlaybackInfo'}),true);
+  assert.equal(shouldRewriteStreamBody({method:'GET',status:200,headers:{'content-type':'application/vnd.apple.mpegurl'},playback:true,pathname:'/master.m3u8'}),true);
+  assert.equal(shouldRewriteStreamBody({method:'GET',status:206,headers:{'content-type':'application/vnd.apple.mpegurl','content-range':'bytes 0-99/200'},playback:true,pathname:'/master.m3u8'}),false);
+});
+
+test('a non-Range 200 media response with a wrong JSON MIME type remains byte-for-byte intact',async()=>{
+  const bytes=Buffer.concat([Buffer.from([0,255,254,253]),Buffer.alloc(256*1024,0xa5)]);
+  const upstream=http.createServer((_q,s)=>{s.writeHead(200,{'content-type':'application/json','content-length':String(bytes.length)});s.end(bytes)}),up=await listen(upstream),key=deriveKey('y'.repeat(32));
+  const store={data:{routes:[{id:'wrong-mime',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:[`127.0.0.1:${up}`]}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const response=await request(port,'/emu/Videos/1/stream.mp4',{headers:{host:'relay.test'}});
+  assert.equal(response.status,200);assert.equal(response.headers['content-length'],String(bytes.length));assert.deepEqual(response.body,bytes);
   await close(relay);await close(upstream);
 });
 

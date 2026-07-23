@@ -21,9 +21,13 @@ const RELAY_VOD_SEGMENT = '.aegis-vod';
 const runtime = new Map();
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
-const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:256, maxFreeSockets:32, timeout:75_000, scheduling:'lifo' };
+const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo' };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
+const CONNECT_TIMEOUT_MS=10_000;
+const RESPONSE_HEADER_TIMEOUT_MS=60_000;
+const FAILOVER_HEADER_TIMEOUT_MS=15_000;
+const PLAYBACK_HEADER_TIMEOUT_MS=45_000;
 
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
 const safeMethod = method => method === 'GET' || method === 'HEAD';
@@ -214,6 +218,21 @@ function isRewritableType(contentType) {
   const ct=String(contentType||'').toLowerCase();
   return /^text\//.test(ct) || /(json|xml|javascript|ecmascript|mpegurl|dash\+xml)/.test(ct);
 }
+function isManifestResponse(contentType, pathname='') {
+  const ct=String(contentType||'').toLowerCase(),path=String(pathname||'').toLowerCase();
+  return /(mpegurl|dash\+xml)/.test(ct)||/\.(?:m3u8|mpd)(?:$|[?#])/i.test(path);
+}
+// A playback URL is a byte stream unless it is unmistakably an HLS/DASH manifest. Some Emby/CDN
+// stacks return a first, non-Range media response as HTTP 200 and occasionally mislabel it as
+// text/plain or application/json. Sending that body through StringDecoder/RegExp corrupts bytes,
+// burns CPU and throttles the stream. Keep the entire media path zero-copy by default; API responses
+// such as PlaybackInfo are not classified as playback and remain eligible for URL rewriting.
+export function shouldRewriteStreamBody({method='GET',status=200,headers={},playback=false,pathname=''}) {
+  if(String(method).toUpperCase()==='HEAD'||headers.range||headers['content-range']||status===206||status===204||status===304)return false;
+  if(!isRewritableType(headers['content-type']))return false;
+  if(playback&&!isManifestResponse(headers['content-type'],pathname))return false;
+  return true;
+}
 // A streaming stream-URL rewriter. It never buffers the whole body — it rewrites matches as bytes
 // flow through and only holds back a short tail (a possible partial URL at a chunk boundary), so the
 // client starts receiving the response immediately. This keeps playback start fast and can never
@@ -392,6 +411,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         // nothing is ever fully buffered, so the client starts receiving bytes immediately.
         const deliver=(...stages)=>{
           res.writeHead(status,out);
+          res.flushHeaders?.();
           const done=err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); };
           const tail=stages[stages.length-1];
           if(speed>0){
@@ -404,14 +424,13 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
             pipeline(...stages,res,done);
           }
         };
-        // The stream-URL rewrite only touches text/manifest/API bodies. Media — any Range request, a
-        // 206 Partial Content, a HEAD, or a bodyless status — is passed straight through untouched, so
-        // playback start, throughput and seeking are identical to a node with no rewriting. The
-        // rewrite itself streams (never buffers), decompressing on the fly when the body is encoded.
+        // The stream-URL rewrite only touches API bodies and explicit HLS/DASH manifests. Every other
+        // playback response is passed straight through, including non-Range HTTP 200 bodies with a
+        // wrong text/JSON MIME type. The rewrite itself streams and decompresses on the fly.
         const enc=out['content-encoding'];
-        const mediaResponse=!!req.headers.range||req.method==='HEAD'||status===206||status===204||status===304;
-        const gunzip=rewriter&&!mediaResponse&&isRewritableType(out['content-type'])?decompressor(enc):null;
-        if (rewriter && !mediaResponse && gunzip!==undefined && isRewritableType(out['content-type'])) {
+        const rewriteBody=!!rewriter&&shouldRewriteStreamBody({method:req.method,status,headers:{...out,range:req.headers.range},playback,pathname:target.pathname});
+        const gunzip=rewriteBody?decompressor(enc):null;
+        if (rewriteBody && gunzip!==undefined) {
           // Length and encoding change as we rewrite/decompress, so drop them and let the response chunk.
           delete out['content-encoding']; delete out['content-length'];
           const rewrite=new StreamRewrite(rewriter);
@@ -421,11 +440,22 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         } else deliver(upRes);
       });
       activeUp=up;
-      const connectTimer=setTimeout(()=>up.destroy(new Error('connect timeout')),20_000);
-      up.on('socket',s=>{s.setNoDelay(true);if(s.connecting)s.once('connect',()=>clearTimeout(connectTimer));else clearTimeout(connectTimer)});
+      const timeoutError=message=>Object.assign(new Error(message),{code:'ETIMEDOUT'});
+      const connectTimer=setTimeout(()=>up.destroy(timeoutError('connect timeout')),CONNECT_TIMEOUT_MS);
+      const responseTimeout=playback?PLAYBACK_HEADER_TIMEOUT_MS:(configured.length>1?FAILOVER_HEADER_TIMEOUT_MS:RESPONSE_HEADER_TIMEOUT_MS);
+      const headerTimer=setTimeout(()=>up.destroy(timeoutError('response headers timeout')),responseTimeout);
+      connectTimer.unref?.();headerTimer.unref?.();
+      up.on('response',()=>{clearTimeout(connectTimer);clearTimeout(headerTimer)});
+      up.on('socket',s=>{
+        s.setNoDelay(true);s.setKeepAlive(true,15_000);
+        if(!s.connecting)return clearTimeout(connectTimer);
+        // TCP connect is not enough for HTTPS: keep the guard running until the TLS handshake has
+        // completed, otherwise a stalled secureConnect can hold playback for the full idle timeout.
+        s.once(secure?'secureConnect':'connect',()=>clearTimeout(connectTimer));
+      });
       up.setTimeout(3600_000,()=>up.destroy(new Error('upstream idle timeout')));
       up.on('error',err=>{
-        clearTimeout(connectTimer);
+        clearTimeout(connectTimer);clearTimeout(headerTimer);
         // A client that walked away is not an upstream fault; counting it opened circuits on
         // perfectly healthy nodes and produced sporadic 502s mid-session.
         if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
