@@ -56,6 +56,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_buffering off;
         proxy_buffer_size 64k;
+        proxy_buffers 4 64k;
+        proxy_busy_buffers_size 128k;
     }
     location / {
         proxy_pass http://aegis_relay_backend;
@@ -66,6 +68,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_buffering off;
         proxy_buffer_size 64k;
+        proxy_buffers 4 64k;
+        proxy_busy_buffers_size 128k;
     }
 }
 
@@ -88,6 +92,9 @@ server {
         proxy_request_buffering off;
         proxy_buffering off;
         proxy_buffer_size 256k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 512k;
+        proxy_ignore_headers X-Accel-Buffering;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
     }
