@@ -1,6 +1,10 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const scriptPath=new URL(document.currentScript?.src||location.href).pathname;
 const base=scriptPath.endsWith('/app.js')?scriptPath.replace(/\/app\.js$/,'/api'):location.pathname.replace(/\/$/,'')+'/api';
+// Theme: apply the saved (or system) preference before first paint of the app shell.
+const THEME_KEY='aegis-theme';
+(function(){let t;try{t=localStorage.getItem(THEME_KEY)}catch{}if(t!=='dark'&&t!=='light')t=window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.dataset.theme=t})();
+function toggleTheme(){const next=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=next;try{localStorage.setItem(THEME_KEY,next)}catch{}}
 const state={csrf:'',routes:[],agents:[],panelVersion:'',dashboard:null,editing:null,page:'dashboard',panelIcon:''};
 const titles={dashboard:'仪表盘',nodes:'节点管理',agents:'代理机器',traffic:'流量统计',diagnostics:'故障诊断',audit:'安全审计',notifications:'通知提醒',account:'个人设置',deployment:'部署向导'};
 // One-click client-identity templates for authorized upstreams. Device ID stays untouched so it remains unique per install.
@@ -233,6 +237,7 @@ $('#icon-apply-url').onclick=async()=>{
 $('#icon-reset').onclick=async()=>{try{await savePanelIcon({icon:''});toast('已恢复默认图标')}catch(e){toast(e.message,true)}};
 async function switchPage(page){state.page=page;$$('.page').forEach(x=>x.classList.add('hidden'));$(`#${page}-page`).classList.remove('hidden');$$('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('#page-title').textContent=titles[page];$('#breadcrumb').textContent=`控制台 / ${titles[page]}`;const canAdd=page==='dashboard'||page==='nodes'||page==='agents';$('#global-add').style.display=canAdd?'':'none';$('#global-add').innerHTML=page==='agents'?'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>添加机器':'<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新增节点';$('#global-add').onclick=page==='agents'?openAgentModal:()=>openDrawer();closeMenu();if(page==='audit')await loadAudit();if(page==='agents')await loadAgents();if(page==='deployment')await loadDeployment();if(page==='notifications')await loadNotifications();if(page==='account')await loadAccount();if(page==='diagnostics')await loadRuntime()}
 function closeMenu(){$('#mobile-menu').classList.add('hidden')}
+$('#theme-toggle').onclick=toggleTheme;
 $('#nav-toggle').onclick=()=>$('#mobile-menu').classList.toggle('hidden');
 $('#mobile-menu').onclick=e=>{if(e.target.id==='mobile-menu')closeMenu()};
 $('#nav-logout').onclick=()=>$('#logout').onclick();

@@ -45,6 +45,24 @@
   --shadow:0 18px 50px rgba(45,38,22,.10);
   --shadow-sm:0 6px 20px rgba(45,38,22,.07);
   --ease:cubic-bezier(.16,1,.3,1);
+  --icon-ring:rgba(255,255,255,.55);
+  --glass:rgba(244,241,234,.82);
+  --scrollbar:rgba(28,26,20,.16);--scrollbar-hover:rgba(28,26,20,.28);
+}
+/* ---- Dark theme: the token system inverts cleanly; a few components below read --icon-ring / --glass ---- */
+:root[data-theme="dark"]{
+  --bg:#0d100e;--bg-soft:#12160f;
+  --rail:#090b09;--rail-soft:#10130f;
+  --surface:#191e18;--surface-2:#212820;--surface-3:#2c332a;--inset:#151a13;
+  --line:rgba(255,255,255,.10);--line-2:rgba(255,255,255,.19);
+  --text:#e9ede3;--text-2:#a7ad9d;--text-3:#71776a;--muted:#8b9182;
+  --accent:#57c596;--accent-strong:#46b184;--accent-soft:rgba(87,197,150,.15);--accent-glow:rgba(87,197,150,.34);
+  --blue:#5f9edb;--violet:#9d86e2;--amber:#d69a45;--green:#54cd8e;--red:#e26a71;
+  --green-dim:rgba(84,205,142,.16);--amber-dim:rgba(214,154,69,.16);--blue-dim:rgba(95,158,219,.16);
+  --violet-dim:rgba(157,134,226,.16);--red-dim:rgba(226,106,113,.16);--accent-dim:rgba(87,197,150,.17);
+  --shadow:0 22px 55px rgba(0,0,0,.55);--shadow-sm:0 6px 22px rgba(0,0,0,.4);
+  --icon-ring:rgba(255,255,255,.06);--glass:rgba(16,20,15,.82);
+  --scrollbar:rgba(255,255,255,.16);--scrollbar-hover:rgba(255,255,255,.28);
 }
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%}
@@ -60,8 +78,15 @@ body{
 button,input,textarea,select{font:inherit;color:inherit}
 button{cursor:pointer}
 ::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:rgba(28,26,20,.16);border-radius:99px;border:2px solid transparent;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:rgba(28,26,20,.28);background-clip:content-box}
+::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:99px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-hover);background-clip:content-box}
+/* theme toggle (topbar) — shows the icon of the theme you'd switch TO */
+.icon-btn-box{display:inline-grid;place-items:center;width:42px;height:42px;flex-shrink:0;border:1px solid var(--line-2);
+  border-radius:12px;background:var(--surface);color:var(--text-2);cursor:pointer;transition:.16s var(--ease)}
+.icon-btn-box:hover{border-color:var(--accent);color:var(--accent)}
+.icon-btn-box svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.9}
+:root[data-theme="dark"] .ico-moon{display:none}
+:root:not([data-theme="dark"]) .ico-sun{display:none}
 .hidden{display:none!important}
 .muted{color:var(--muted)}
 .eyebrow{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.15em;text-transform:uppercase}
@@ -179,7 +204,7 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .security-state small{display:block;font-size:10px;color:var(--rail-text-3)}
 .workspace{margin-left:242px;min-height:100vh}
 .topbar{height:88px;padding:0 36px;display:flex;align-items:center;justify-content:space-between;
-  border-bottom:1px solid var(--line);background:rgba(244,241,234,.82);backdrop-filter:saturate(150%) blur(16px);
+  border-bottom:1px solid var(--line);background:var(--glass);backdrop-filter:saturate(150%) blur(16px);
   position:sticky;top:0;z-index:10}
 .topbar p{margin:0;color:var(--text-3);font-size:11px;letter-spacing:.03em}
 .topbar h1{margin:3px 0 0;font-size:22px;letter-spacing:-.02em}
@@ -221,7 +246,7 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .metric.violet:before{background:var(--violet)}.metric.amber:before{background:var(--amber)}
 .metric.blue:after{background:var(--blue-dim)}.metric.green:after{background:var(--accent-dim)}
 .metric.violet:after{background:var(--violet-dim)}.metric.amber:after{background:var(--amber-dim)}
-.metric-icon{position:relative;z-index:1;display:grid;place-items:center;width:50px;height:50px;border-radius:15px;flex-shrink:0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.5)}
+.metric-icon{position:relative;z-index:1;display:grid;place-items:center;width:50px;height:50px;border-radius:15px;flex-shrink:0;box-shadow:inset 0 0 0 1px var(--icon-ring)}
 .metric-icon svg{width:23px;height:23px;fill:none;stroke-width:1.9}
 .metric.blue .metric-icon{background:var(--blue-dim)}.metric.blue .metric-icon svg{stroke:var(--blue)}
 .metric.green .metric-icon{background:var(--accent-dim)}.metric.green .metric-icon svg{stroke:var(--accent)}
@@ -519,7 +544,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .agent-notice{display:flex;align-items:center;gap:14px;padding:15px 18px;margin-bottom:16px;
   border:1px solid var(--line);border-radius:var(--r);background:var(--accent-soft)}
 .agent-notice-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:11px;
-  background:#fff;flex-shrink:0;box-shadow:var(--shadow-sm)}
+  background:var(--surface);flex-shrink:0;box-shadow:var(--shadow-sm)}
 .agent-notice svg{width:19px;height:19px;stroke:var(--accent);fill:none;stroke-width:1.8}
 .agent-notice strong{display:block;font-size:13px;color:var(--text)}
 .agent-notice small{display:block;color:var(--text-2);margin-top:2px}
@@ -573,7 +598,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .bar-chart.traffic-bars{display:block;height:auto;padding-top:6px}
 .dashboard-node-panel{margin-top:14px}
 .empty-state b{font-size:34px;color:var(--text-3)}
-.form-grid select option{background:#fff;color:var(--text)}
+.form-grid select option{background:var(--surface);color:var(--text)}
 
 @media(max-width:760px){
   .machine-overview{grid-template-columns:1fr}
