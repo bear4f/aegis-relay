@@ -132,3 +132,41 @@ test('compatibility profile sets hint headers but never rewrites the authenticat
   assert.match(a.url,/api_key=keepme/);
   await close(relay);await close(upstream);
 });
+
+test('front/back split: stream URLs in text bodies are rewritten and proxied back, unknown hosts blocked',async()=>{
+  let streamUrl=null,host='';
+  // One origin plays both roles: /Items returns an API body pointing at the (split) stream domain,
+  // everything else is the stream itself. The declared stream domain is this same host:port.
+  const upstream=http.createServer((q,s)=>{
+    if(q.url.startsWith('/Items')){s.setHeader('content-type','application/json');return s.end(JSON.stringify({MediaSources:[{DirectStreamUrl:`http://${host}/videos/9/stream.mp4?api_key=abc`}]}))}
+    streamUrl=q.url;s.setHeader('content-type','video/mp4');s.end('stream-bytes');
+  });
+  const up=await listen(upstream);host=`127.0.0.1:${up}`;const key=deriveKey('s'.repeat(32));
+  const store={data:{routes:[{id:'split',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://${host}`],allowPrivate:true,streamRewrite:{enabled:true,domains:[host]}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  // 1. the stream URL in the JSON body is rewritten to a path on this relay's own domain
+  const info=await request(port,'/emu/Items/1/PlaybackInfo',{headers:{host:'relay.test','x-forwarded-proto':'https'}});
+  const streamPath=`/emu/.aegis-vod/http/${host}/videos/9/stream.mp4?api_key=abc`;
+  assert.ok(info.body.toString().includes(`https://relay.test${streamPath}`),info.body.toString());
+  // 2. requesting the rewritten path proxies back to the real stream domain, query intact
+  const media=await request(port,streamPath,{headers:{host:'relay.test'}});
+  assert.equal(media.status,200);
+  assert.equal(media.body.toString(),'stream-bytes');
+  assert.equal(streamUrl,'/videos/9/stream.mp4?api_key=abc');
+  // 3. a host the operator never declared cannot be reached through the path (SSRF guard)
+  assert.equal((await request(port,'/emu/.aegis-vod/http/169.254.169.254/latest/meta-data',{headers:{host:'relay.test'}})).status,404);
+  // 4. only http/https transports are accepted
+  assert.equal((await request(port,`/emu/.aegis-vod/ftp/${host}/x`,{headers:{host:'relay.test'}})).status,404);
+  await close(relay);await close(upstream);
+});
+
+test('stream-domain rewrite is scheme-qualified and boundary-guarded against lookalike hosts',async()=>{
+  const upstream=http.createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({a:'https://vod.example.net/x',b:'https://vod.example.net.evil.com/y',c:'wss://vod.example.net/live'}))}),up=await listen(upstream),key=deriveKey('t'.repeat(32));
+  const store={data:{routes:[{id:'b',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const t=(await request(port,'/emu/System/Info',{headers:{host:'relay.test','x-forwarded-proto':'https'}})).body.toString();
+  assert.ok(t.includes('https://relay.test/emu/.aegis-vod/https/vod.example.net/x'),t);
+  assert.ok(t.includes('wss://relay.test/emu/.aegis-vod/https/vod.example.net/live'),t);
+  assert.ok(t.includes('https://vod.example.net.evil.com/y'),t); // lookalike suffix is left untouched
+  await close(relay);await close(upstream);
+});
