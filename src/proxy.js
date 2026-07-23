@@ -1,7 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
-import { pipeline, Readable } from 'node:stream';
+import zlib from 'node:zlib';
+import { pipeline, Transform } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
 import { isRouteAuthKey, verifyRouteToken } from './route-auth.js';
@@ -16,10 +18,6 @@ const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 // relay under a dedicated path so the client never leaves our domain, and proxy the path back to the
 // real stream domain. Only operator-declared stream hosts are ever reachable through it (SSRF guard).
 const RELAY_VOD_SEGMENT = '.aegis-vod';
-// Cap on how much of a "text" response we buffer to rewrite. Emby API/manifest bodies are tiny; video
-// is never a rewritable content-type. Past the cap we stop buffering and stream the rest untouched so
-// a mislabeled huge body can never blow up memory.
-const STREAM_REWRITE_CAP = 16 * 1024 * 1024;
 const runtime = new Map();
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
@@ -71,8 +69,7 @@ export async function validateUpstreamList(value, allowPrivate = false) {
   return result;
 }
 
-function normalizedUpstreams(route, playback = false) {
-  if (playback && route.playbackUpstreams?.length) return route.playbackUpstreams;
+function normalizedUpstreams(route) {
   if (route.upstreams?.length) return route.upstreams;
   return route.upstream ? [route.upstream] : [];
 }
@@ -130,18 +127,18 @@ function safeUpstreamError(error) {
   if(code==='EPROTO'||message.includes('wrong version number')||message.includes('ssl routines'))return'上游协议不匹配，请检查 HTTP/HTTPS';
   return'上游连接失败';
 }
-function orderedTargets(route, playback) {
+function orderedTargets(route) {
   // Deterministic order — always prefer the primary line. Rotating upstreams per request sent a
   // client's seeks to a different Emby server than the one holding its playback/transcode session,
   // which showed up as long buffering and dropped streams. Extra lines are failover, not balancing.
-  const all=normalizedUpstreams(route,playback);
+  const all=normalizedUpstreams(route);
   if (!all.length) return [];
   const available=all.filter(t=>stateFor(route,t).openUntil<=Date.now());
   return available.length?available:all;
 }
 
 export function getRuntimeStatus(routes) {
-  return routes.map(route => ({ id:route.id, alias:route.alias, upstreams:[...normalizedUpstreams(route),...normalizedUpstreams(route,true).filter(x=>!normalizedUpstreams(route).includes(x))].map(target=>{
+  return routes.map(route => ({ id:route.id, alias:route.alias, upstreams:normalizedUpstreams(route).map(target=>{
     const s=stateFor(route,target); return { target:'[encrypted upstream]', failures:s.failures, circuitOpen:s.openUntil>Date.now(), retryAt:s.openUntil?new Date(s.openUntil).toISOString():null, lastSuccess:s.lastSuccess, lastError:s.lastError };
   }) }));
 }
@@ -205,20 +202,48 @@ function buildStreamRewriter(route, publicContext, prefix) {
   const base=`${publicContext.proto}://${publicContext.host}${prefix}/${RELAY_VOD_SEGMENT}/`;
   const wsBase=`${publicContext.proto==='https'?'wss':'ws'}://${publicContext.host}${prefix}/${RELAY_VOD_SEGMENT}/`;
   const alt=domains.map(d=>d.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|');
-  const re=new RegExp('(https?|wss?):\\/\\/('+alt+')(:\\d+)?(?=[/"\'?#\\\\]|$)','gi');
-  return text=>text.replace(re,(m,scheme,host,port)=>{
-    const s=scheme.toLowerCase(), secure=s==='https'||s==='wss', ws=s==='ws'||s==='wss';
-    return (ws?wsBase:base)+(secure?'https':'http')+'/'+host+(port||'');
-  });
-}
-// Stream the already-buffered head, then the remainder of the source, as one readable — used only
-// when a text body overran the rewrite cap and must be delivered untouched without re-buffering.
-function chainStream(chunks, tail) {
-  return Readable.from((async function*(){ for(const c of chunks) yield c; for await(const c of tail) yield c; })());
+  const regex=new RegExp('(https?|wss?):\\/\\/('+alt+')(:\\d+)?(?=[/"\'?#\\\\]|$)','g');
+  const replacer=m=>{ const s=m[1].toLowerCase(), secure=s==='https'||s==='wss', ws=s==='ws'||s==='wss';
+    return (ws?wsBase:base)+(secure?'https':'http')+'/'+m[2]+(m[3]||''); };
+  // Longest possible match: scheme + longest declared host + ":65535". Carry this many trailing chars
+  // between chunks so a URL split across chunk boundaries is never mis-emitted.
+  const keep=Math.max(...domains.map(d=>d.length))+16;
+  return { regex, replacer, keep };
 }
 function isRewritableType(contentType) {
   const ct=String(contentType||'').toLowerCase();
   return /^text\//.test(ct) || /(json|xml|javascript|ecmascript|mpegurl|dash\+xml)/.test(ct);
+}
+// A streaming stream-URL rewriter. It never buffers the whole body — it rewrites matches as bytes
+// flow through and only holds back a short tail (a possible partial URL at a chunk boundary), so the
+// client starts receiving the response immediately. This keeps playback start fast and can never
+// stall a stream, even if a body is large or a response is misclassified as rewritable.
+class StreamRewrite extends Transform {
+  constructor({regex,replacer,keep}){ super(); this.regex=regex; this.replacer=replacer; this.keep=keep; this.decoder=new StringDecoder('utf8'); this.carry=''; }
+  _transform(chunk,_enc,cb){
+    const s=this.carry+this.decoder.write(chunk);
+    if(s.length<=this.keep){ this.carry=s; return cb(); }
+    const safe=s.length-this.keep; this.regex.lastIndex=0;
+    let out='',lastEnd=0,m;
+    while((m=this.regex.exec(s))){
+      if(m.index>=safe)break;              // starts in the carry zone — might be incomplete, defer it
+      out+=s.slice(lastEnd,m.index)+this.replacer(m); lastEnd=m.index+m[0].length;
+    }
+    const emitEnd=Math.max(lastEnd,safe);
+    out+=s.slice(lastEnd,emitEnd); this.carry=s.slice(emitEnd);
+    if(out)this.push(out); cb();
+  }
+  _flush(cb){ const s=this.carry+this.decoder.end(); this.regex.lastIndex=0; this.push(s.replace(this.regex,(...a)=>this.replacer(a))); cb(); }
+}
+// Streaming decompressor matched to the body's encoding, or null for identity/none. Undefined return
+// means an encoding we can't decode — the caller then streams the body through untouched.
+function decompressor(encoding){
+  const e=String(encoding||'').toLowerCase();
+  if(!e||e==='identity')return null;
+  if(e==='gzip'||e==='x-gzip')return zlib.createGunzip();
+  if(e==='deflate')return zlib.createInflate();
+  if(e==='br')return zlib.createBrotliDecompress();
+  return undefined;
 }
 
 function externalRedirectPath(location, base) {
@@ -295,7 +320,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     try { continuation=continuationTarget(found,key); vod=vodTarget(found,incoming.search); }
     catch { res.writeHead(404,{'cache-control':'no-store'});return res.end('not found'); }
     const {route}=found, playback=continuation?.playback===true||!!vod||isPlaybackPath(found.rest);
-    const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route,playback);
+    const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
@@ -309,10 +334,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     // Apply the optional client-compat header hint (owned/authorized upstreams only). Query string
     // is relayed verbatim — we never rewrite the authenticated identity or tokens.
     applyClientProfile(originalHeaders,route.clientProfile);
-    // Rewriting embedded stream-domain URLs needs an unencoded body, so ask the upstream not to
-    // compress. Only enabled nodes pay this cost; everything else keeps upstream compression.
+    // Prepared only when the node opts into stream-URL rewriting; null (no effect) otherwise. We do
+    // NOT touch Accept-Encoding here — the media path and every non-rewritten response keep their
+    // normal compression, so playback speed on a rewrite-enabled node matches one without it.
     const rewriter=buildStreamRewriter(route,publicContext,found.prefix);
-    if(rewriter)originalHeaders['accept-encoding']='identity';
     const relaySearch=incoming.search;
     const canRetry=safeMethod(req.method); let finished=false, clientGone=false, activeUp=null;
     // Emby clients abort constantly (seeking, stopping, backgrounding). Nginx tears the upstream
@@ -325,7 +350,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
 
     // Declared stream hosts are trusted parts of the same deployment, so keep credentials flowing to
     // them just like the configured upstreams (the /.aegis-vod/ proxy target lives on one of these).
-    const routeOrigins=new Set([...normalizedUpstreams(route),...normalizedUpstreams(route,true),...streamRewriteDomains(route).flatMap(h=>[`https://${h}`,`http://${h}`])].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
+    const routeOrigins=new Set([...normalizedUpstreams(route),...streamRewriteDomains(route).flatMap(h=>[`https://${h}`,`http://${h}`])].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
     const attempt=(targetValue,index,freshSocket=false)=>{
       if (finished || clientGone) return;
       const directTarget=(continuation&&index===0&&continuation.target)||(vod&&index===0&&vod.target)||null;
@@ -363,32 +388,36 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
         // half-open response. Only tear the socket down on failure; a cleanly finished response
         // returns to the pool so the next Range request (a seek) skips the TCP+TLS handshake.
-        const deliver=source=>{
+        // pipe upRes through any transforms, then to the client. `stages` is [source, ...transforms];
+        // nothing is ever fully buffered, so the client starts receiving bytes immediately.
+        const deliver=(...stages)=>{
           res.writeHead(status,out);
           const done=err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); };
+          const tail=stages[stages.length-1];
           if(speed>0){
             const counter=new ThrottleTransform(speed*1024*1024/8,bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)});
-            pipeline(source,counter,res,done);
+            pipeline(...stages,counter,res,done);
           }else{
-            // No rate limit means no transform. A Transform defaults to a 16 KiB high water mark, so
-            // parking one in front of every response throttled full-speed playback to that buffer and
-            // added a pause/resume cycle per chunk. Count bytes with a listener instead.
-            source.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
-            pipeline(source,res,done);
+            // No rate limit means no throttling transform. Count bytes off the last stage (what the
+            // client actually receives) with a listener instead of parking a transform in the path.
+            tail.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
+            pipeline(...stages,res,done);
           }
         };
-        const encoding=String(out['content-encoding']||'').toLowerCase();
-        if (rewriter && isRewritableType(out['content-type']) && (!encoding||encoding==='identity')) {
-          // Buffer the (small) text/manifest body, rewrite embedded stream URLs, then deliver. Length
-          // changes, so drop the upstream content-length and let the response chunk.
-          const chunks=[]; let size=0;
-          const onData=chunk=>{
-            chunks.push(chunk); size+=chunk.length;
-            if(size>STREAM_REWRITE_CAP){ upRes.pause(); upRes.off('data',onData); upRes.off('end',onEnd); delete out['content-length']; deliver(chainStream(chunks,upRes)); }
-          };
-          const onEnd=()=>{ const outBuf=Buffer.from(rewriter(Buffer.concat(chunks,size).toString('utf8')),'utf8'); out['content-length']=String(outBuf.length); deliver(Readable.from([outBuf])); };
-          upRes.on('data',onData); upRes.on('end',onEnd);
-          upRes.on('error',()=>{ if(!up.destroyed)up.destroy(); finishMetric(); });
+        // The stream-URL rewrite only touches text/manifest/API bodies. Media — any Range request, a
+        // 206 Partial Content, a HEAD, or a bodyless status — is passed straight through untouched, so
+        // playback start, throughput and seeking are identical to a node with no rewriting. The
+        // rewrite itself streams (never buffers), decompressing on the fly when the body is encoded.
+        const enc=out['content-encoding'];
+        const mediaResponse=!!req.headers.range||req.method==='HEAD'||status===206||status===204||status===304;
+        const gunzip=rewriter&&!mediaResponse&&isRewritableType(out['content-type'])?decompressor(enc):null;
+        if (rewriter && !mediaResponse && gunzip!==undefined && isRewritableType(out['content-type'])) {
+          // Length and encoding change as we rewrite/decompress, so drop them and let the response chunk.
+          delete out['content-encoding']; delete out['content-length'];
+          const rewrite=new StreamRewrite(rewriter);
+          // pipeline (inside deliver) tears every stage down together if the decoder hits a mislabeled
+          // body, so a bad response fails cleanly instead of stalling.
+          deliver(...(gunzip?[upRes,gunzip,rewrite]:[upRes,rewrite]));
         } else deliver(upRes);
       });
       activeUp=up;
@@ -420,7 +449,7 @@ export function handleUpgrade(req, socket, head, routeSource, key) {
   // A rewritten live socket (wss://…/.aegis-vod/<host>/…) tunnels straight to the declared stream
   // host; otherwise use the node's primary upstream. An unknown/blocked stream host is dropped.
   let vod; try { vod=vodTarget(found,relaySearch); } catch { return socket.destroy(); }
-  const targets=vod?[vod.target.href]:orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
+  const targets=vod?[vod.target.href]:orderedTargets(found.route); if(!targets.length)return socket.destroy();
   const target=vod?vod.target:joinTarget(targets[0],found.rest,relaySearch), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,found.route.clientProfile);
   if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;

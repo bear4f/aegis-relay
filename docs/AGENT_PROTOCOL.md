@@ -437,7 +437,6 @@ Agent
       "name": "Charity",
       "enabled": true,
       "upstreams": ["https://origin.example.com"],
-      "playbackUpstreams": [],
       "allowPrivate": false,
       "tlsVerify": true,
       "showOnHome": false,

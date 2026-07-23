@@ -46,7 +46,6 @@ test('atomic local-agent apply keeps in-flight playback on the old revision',asy
 });
 test('private upstreams are denied unless explicitly allowed',async()=>{await assert.rejects(()=>validateUpstream('http://127.0.0.1:8096',false));assert.equal(await validateUpstream('http://127.0.0.1:8096',true),'http://127.0.0.1:8096')});
 test('upstream lists support newline and semicolon separators',async()=>{const list=await validateUpstreamList('http://127.0.0.1:1;\nhttp://127.0.0.1:2',true);assert.deepEqual(list,['http://127.0.0.1:1','http://127.0.0.1:2'])});
-test('playback paths use the separate playback upstream',async()=>{const main=http.createServer((q,s)=>s.end('main')),play=http.createServer((q,s)=>s.end('play')),mp=await listen(main),pp=await listen(play),key=deriveKey('q'.repeat(32));const store={data:{routes:[{id:'split',alias:'split',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${mp}`],playbackUpstreams:[`http://127.0.0.1:${pp}`],allowPrivate:true}]}};const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);assert.equal(await (await fetch(`http://127.0.0.1:${port}/split/Items`)).text(),'main');assert.equal(await (await fetch(`http://127.0.0.1:${port}/split/Videos/123/stream`)).text(),'play');await close(relay);await close(main);await close(play)});
 test('upstream redirects stay behind the relay and preserve playback ranges',async()=>{
   let relay,cdnRequest;
   const cdn=http.createServer((q,s)=>{cdnRequest={url:q.url,headers:q.headers};s.writeHead(206,{'content-type':'video/mp4','content-range':'bytes 0-3/10'});s.end('data')});
@@ -168,5 +167,41 @@ test('stream-domain rewrite is scheme-qualified and boundary-guarded against loo
   assert.ok(t.includes('https://relay.test/emu/.aegis-vod/https/vod.example.net/x'),t);
   assert.ok(t.includes('wss://relay.test/emu/.aegis-vod/https/vod.example.net/live'),t);
   assert.ok(t.includes('https://vod.example.net.evil.com/y'),t); // lookalike suffix is left untouched
+  await close(relay);await close(upstream);
+});
+
+test('rewrite never touches the media path: Range/206 responses stream through unbuffered and unaltered',async()=>{
+  // A Range request is media — even on a rewrite-enabled node it must pass through byte-for-byte with
+  // its 206 status and headers, never buffered, so seeking/throughput are unaffected.
+  const upstream=http.createServer((q,s)=>{s.writeHead(206,{'content-type':'video/mp4','accept-ranges':'bytes','content-range':'bytes 0-4/1000','content-length':'5'});s.end('ABCDE')}),up=await listen(upstream),key=deriveKey('r'.repeat(32));
+  const store={data:{routes:[{id:'m',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:[`127.0.0.1:${up}`]}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const r=await request(port,'/emu/Videos/1/stream.mp4',{headers:{host:'relay.test',range:'bytes=0-4'}});
+  assert.equal(r.status,206);
+  assert.equal(r.headers['content-range'],'bytes 0-4/1000');
+  assert.equal(r.headers['content-length'],'5');
+  assert.equal(r.body.toString(),'ABCDE');
+  await close(relay);await close(upstream);
+});
+
+test('streaming rewrite reassembles a stream URL split across chunk boundaries',async()=>{
+  // The rewrite streams (never buffers); a URL straddling two data chunks must still be rewritten
+  // whole, and nothing before it should be withheld longer than the short carry.
+  const upstream=http.createServer((q,s)=>{s.writeHead(200,{'content-type':'application/json'});s.write('{"a":"https://vod.exa');setImmediate(()=>s.end('mple.net/movie.mp4","b":"keep"}'))}),up=await listen(upstream),key=deriveKey('c'.repeat(32));
+  const store={data:{routes:[{id:'c',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const t=(await request(port,'/emu/Items/1',{headers:{host:'relay.test','x-forwarded-proto':'https'}})).body.toString();
+  assert.equal(t,'{"a":"https://relay.test/emu/.aegis-vod/https/vod.example.net/movie.mp4","b":"keep"}');
+  await close(relay);await close(upstream);
+});
+
+test('rewrite decodes a gzip-compressed API body before rewriting stream URLs',async()=>{
+  const zlib=await import('node:zlib');
+  const upstream=http.createServer((q,s)=>{const body=zlib.gzipSync(JSON.stringify({url:'https://vod.example.net/a.mp4'}));s.writeHead(200,{'content-type':'application/json','content-encoding':'gzip','content-length':String(body.length)});s.end(body)}),up=await listen(upstream),key=deriveKey('z'.repeat(32));
+  const store={data:{routes:[{id:'g',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const r=await request(port,'/emu/Items/1',{headers:{host:'relay.test','x-forwarded-proto':'https'}});
+  assert.equal(r.headers['content-encoding'],undefined); // re-served decoded
+  assert.ok(r.body.toString().includes('https://relay.test/emu/.aegis-vod/https/vod.example.net/a.mp4'),r.body.toString());
   await close(relay);await close(upstream);
 });

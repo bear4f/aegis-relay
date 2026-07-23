@@ -15,7 +15,11 @@ import { telemetryFromMetrics } from './telemetry.js';
 
 const DATA_DIR=process.env.AGENT_DATA_DIR||'/app/agent-data',IDENTITY_FILE=path.join(DATA_DIR,'identity.json'),CURRENT_FILE=path.join(DATA_DIR,'current.snapshot'),PREVIOUS_FILE=path.join(DATA_DIR,'previous.snapshot'),METRICS_FILE=path.join(DATA_DIR,'metrics.enc');
 const DOMAIN_REQUEST_FILE=path.join(DATA_DIR,'host-domain-request.json'),DOMAIN_STATUS_FILE=path.join(DATA_DIR,'host-domain-status.json');
-const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=process.env.AGENT_VERSION||'0.8.0',PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
+// Read the version from the package.json baked into this image, so the version the agent reports
+// always matches the code it is actually running — an upgrade rebuilds the image, so a bumped version
+// on the panel is proof the new build is live. Fall back to the env/hardcoded value if unreadable.
+function codeVersion(){try{return JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;}catch{return process.env.AGENT_VERSION||'0.0.0';}}
+const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=codeVersion(),PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
 const AGENT_PROXY_MODE=String(process.env.AGENT_PROXY_MODE||'').trim().toLowerCase(),AGENT_PROXY_IP=String(process.env.AGENT_PROXY_IP||'').trim();
 const sha256=value=>b64u(crypto.createHash('sha256').update(value).digest());
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -53,7 +57,7 @@ function sealLocal(snapshot,identity){const iv=crypto.randomBytes(12),cipher=cry
 function openLocal(payload,identity){const env=JSON.parse(payload),decipher=crypto.createDecipheriv('aes-256-gcm',storageKey(identity),Buffer.from(env.iv,'base64url'));decipher.setAuthTag(Buffer.from(env.tag,'base64url'));return JSON.parse(Buffer.concat([decipher.update(Buffer.from(env.data,'base64url')),decipher.final()]).toString('utf8'))}
 function loadMetricStore(identity){let data={};if(fs.existsSync(METRICS_FILE)){try{const loaded=openLocal(fs.readFileSync(METRICS_FILE,'utf8'),identity);if(loaded&&typeof loaded==='object'&&!Array.isArray(loaded))data=loaded}catch(error){console.error(`[aegis-agent] cached metrics rejected: ${error.message}`)}}return{data,save(){writeAtomic(METRICS_FILE,sealLocal(data,identity))}}}
 
-function validateRoutes(routes){if(!Array.isArray(routes)||routes.length>100)throw new Error('invalid route count');const aliases=new Set();for(const route of routes){if(!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(route.alias)||aliases.has(route.alias))throw new Error('invalid or duplicate route alias');aliases.add(route.alias);for(const target of [...(route.upstreams||[]),...(route.playbackUpstreams||[])]){const url=new URL(target);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error('invalid route upstream');}}return routes;}
+function validateRoutes(routes){if(!Array.isArray(routes)||routes.length>100)throw new Error('invalid route count');const aliases=new Set();for(const route of routes){if(!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(route.alias)||aliases.has(route.alias))throw new Error('invalid or duplicate route alias');aliases.add(route.alias);for(const target of [...(route.upstreams||[])]){const url=new URL(target);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error('invalid route upstream');}}return routes;}
 
 class RemoteConfig {
   constructor(identity){this.identity=identity;this.routeSource=new AtomicRouteSource([]);this.revision=0;this.hash=null;this.applyState='waiting';this.error='';}
