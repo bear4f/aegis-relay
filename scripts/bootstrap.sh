@@ -8,6 +8,29 @@ INSTALL_DIR="/opt/aegis-relay"
 
 [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行安装命令" >&2; exit 1; }
 
+# Pre-install confirmation panel. `curl | sudo sh` feeds this script through stdin, so the prompt
+# reads from /dev/tty. Non-interactive runs (no controlling terminal, e.g. automation) skip it and
+# install directly, and nothing has been changed on disk yet if the user cancels here.
+if (exec < /dev/tty > /dev/tty) 2>/dev/null; then
+  if [ -f "$INSTALL_DIR/.env" ]; then INSTALL_MODE="更新现有安装（保留主密钥与数据）"; else INSTALL_MODE="全新安装"; fi
+  {
+    echo
+    echo "======== AegisRelay 面板安装 ========"
+    echo "  目标目录 : $INSTALL_DIR"
+    echo "  操作类型 : $INSTALL_MODE"
+    echo "  将执行   : 安装 Docker、Nginx、Certbot 等依赖，构建并启动面板容器"
+    echo "-------------------------------------"
+    echo "  1) 确认，开始安装"
+    echo "  2) 取消"
+    printf '请选择 [1]: '
+  } > /dev/tty
+  IFS= read -r AEGIS_CONFIRM < /dev/tty || AEGIS_CONFIRM=2
+  case "$AEGIS_CONFIRM" in
+    1|'') echo "开始安装……" > /dev/tty;;
+    *) echo "已取消，未做任何修改。" > /dev/tty; exit 0;;
+  esac
+fi
+
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl openssl tar
