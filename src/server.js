@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanAlias, deriveKey, hashPassword, newTotpSecret, randomToken, RateLimiter, requestIp, tokenDigest, verifyPassword, verifyTotp, timingEqual } from './security.js';
 import { Store } from './store.js';
-import { dropRouteRuntime, getRuntimeStatus, handleUpgrade, makeProxyHandler, validateUpstreamList } from './proxy.js';
+import { dropRouteRuntime, getRuntimeStatus, handleUpgrade, makeProxyHandler, RELAY_SERVER_OPTIONS, validateUpstreamList } from './proxy.js';
 import { Metrics } from './metrics.js';
 import { diagnoseRoute } from './diagnostics.js';
 import { Notifier } from './notifier.js';
@@ -241,7 +241,7 @@ const panelHostname=baseHostname(cfg.publicBaseUrl),proxyHostname=baseHostname(c
 function requestHostname(req){try{return new URL(`http://${String(req.headers.host||'')}`).hostname.toLowerCase()}catch{return''}}
 // A single bad request must never take the relay down mid-playback; nginx keeps serving, so do we.
 function relayFailed(res,err){console.error('[aegis] relay error',err&&err.stack||err);if(res.headersSent||res.destroyed||res.writableEnded)return;try{res.writeHead(502,{'cache-control':'no-store'});res.end('bad gateway')}catch{}}
-const proxy=http.createServer((req,res)=>{
+const proxy=http.createServer(RELAY_SERVER_OPTIONS,(req,res)=>{
   res.on('error',()=>{});
   let pathname; try{pathname=new URL(req.url,'http://relay.invalid').pathname}catch{return relayFailed(res,new Error('invalid request target'))}
   try{const role=domainRequestRole({panelHostname,proxyHostname,requestHostname:requestHostname(req)});if(role==='reject')return json(res,421,{error:'misdirected request'});if(role==='proxy'){const out=relay(req,res);if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err));return}if(pathname==='/agent-install.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentInstaller)}if(pathname==='/agent-upgrade.sh'&&req.method==='GET'){res.writeHead(200,headers({'content-type':'text/x-shellscript; charset=utf-8'}));return res.end(agentUpgrader)}const out=pathname.startsWith('/api/agent/v1/')?agentApi.handle(req,res):(isRootAdminRequest(pathname)?serveAdmin(req,res,'/'):(role==='control'?json(res,404,{error:'not found'}):relay(req,res)));if(out&&typeof out.catch==='function')out.catch(err=>relayFailed(res,err))}

@@ -11,7 +11,11 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y nginx certbot python3-certbot-nginx
 SITE=/etc/nginx/sites-available/aegis-relay-agent.conf
 cat > "$SITE" <<EOF
-map \$http_upgrade \$aegis_agent_connection_upgrade { default upgrade; '' close; }
+map \$http_upgrade \$aegis_agent_connection_upgrade { default upgrade; '' ''; }
+upstream aegis_agent_backend {
+    server 127.0.0.1:8080;
+    keepalive 64;
+}
 server {
     listen 80;
     listen [::]:80;
@@ -20,7 +24,7 @@ server {
     client_max_body_size 0;
     if (\$host != $DOMAIN) { return 421; }
     location / {
-        proxy_pass http://127.0.0.1:8080;
+        proxy_pass http://aegis_agent_backend;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -28,7 +32,11 @@ server {
         proxy_set_header Connection \$aegis_agent_connection_upgrade;
         proxy_request_buffering off;
         proxy_buffering off;
+        # With buffering disabled this is the maximum read size per event. The platform default is
+        # only one memory page (4K/8K), which creates needless syscall churn on fast media streams.
+        proxy_buffer_size 256k;
         proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 EOF

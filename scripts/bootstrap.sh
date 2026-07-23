@@ -1,16 +1,11 @@
 #!/bin/sh
 set -eu
 umask 077
-
 REPO="bear4f/aegis-relay"
 BRANCH="main"
 INSTALL_DIR="/opt/aegis-relay"
-
 [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行安装命令" >&2; exit 1; }
 
-# Pre-install confirmation panel. `curl | sudo sh` feeds this script through stdin, so the prompt
-# reads from /dev/tty. Non-interactive runs (no controlling terminal, e.g. automation) skip it and
-# install directly, and nothing has been changed on disk yet if the user cancels here.
 if (exec < /dev/tty > /dev/tty) 2>/dev/null; then
   if [ -f "$INSTALL_DIR/.env" ]; then INSTALL_MODE="更新现有安装（保留主密钥与数据）"; else INSTALL_MODE="全新安装"; fi
   {
@@ -25,23 +20,16 @@ if (exec < /dev/tty > /dev/tty) 2>/dev/null; then
     printf '请选择 [1]: '
   } > /dev/tty
   IFS= read -r AEGIS_CONFIRM < /dev/tty || AEGIS_CONFIRM=2
-  case "$AEGIS_CONFIRM" in
-    1|'') echo "开始安装……" > /dev/tty;;
-    *) echo "已取消，未做任何修改。" > /dev/tty; exit 0;;
-  esac
+  case "$AEGIS_CONFIRM" in 1|'') echo "开始安装……" > /dev/tty;; *) echo "已取消，未做任何修改。" > /dev/tty; exit 0;; esac
 fi
 
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl openssl tar
-  if ! command -v docker >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
-  fi
+  command -v docker >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
   if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-v2 2>/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose
   fi
-  # Some minimal VPS images ship an AppArmor-enabled kernel without the apparmor_parser tool, which
-  # makes `docker build`/`docker run` abort. Install it if missing and restart dockerd so it re-detects.
   if ! command -v apparmor_parser >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y apparmor || true
     if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet docker 2>/dev/null; then systemctl restart docker || true; fi
@@ -77,8 +65,6 @@ if docker compose version >/dev/null 2>&1; then docker compose up -d --build; el
 install -m 0755 scripts/aegis-relay /usr/local/bin/aegis-relay
 chmod 0755 scripts/configure-domain.sh scripts/configure-local-domain.sh scripts/host-domain-apply.sh scripts/domain-wizard.sh
 
-# The panel container stays unprivileged. A narrowly scoped host service watches only for
-# validated domain-switch requests and can run the fixed Nginx/Certbot workflow as root.
 if command -v systemctl >/dev/null 2>&1; then
   cat > /etc/systemd/system/aegis-relay-domain.service <<EOF
 [Unit]
@@ -114,15 +100,7 @@ if [ "$FIRST_INSTALL" -eq 1 ]; then
     echo "跳过临时开放 9080 端口的步骤（需要域名已解析到本机，放行 TCP 80/443）。"
     printf '是否现在配置域名？[Y/n] ' > /dev/tty
     IFS= read -r ANSWER < /dev/tty || ANSWER=n
-    case "$ANSWER" in
-      ''|[Yy]*)
-        if sh scripts/domain-wizard.sh; then
-          DOMAIN_DONE=1
-        else
-          echo "域名配置未完成，可稍后重试：sudo aegis-relay domain" >&2
-        fi
-        ;;
-    esac
+    case "$ANSWER" in ''|[Yy]*) if sh scripts/domain-wizard.sh; then DOMAIN_DONE=1; else echo "域名配置未完成，可稍后重试：sudo aegis-relay domain" >&2; fi;; esac
   fi
   echo
   if [ "$DOMAIN_DONE" -eq 1 ]; then
@@ -144,5 +122,25 @@ if [ "$FIRST_INSTALL" -eq 1 ]; then
     echo "按提示确认面板域名和 Emby 反代域名（默认同域），证书自动申请。"
   fi
 else
-  echo "AegisRelay 已更新并重新启动，现有密钥与数据保持不变。代理域名切换执行器已就绪。"
+  # The proxy kernel and Nginx buffer/keepalive tuning ship together. Re-render the active site on
+  # update so the panel machine receives the same data-plane upgrade as every remote agent.
+  PANEL_BASE=$(sed -n 's/^PUBLIC_BASE_URL=//p' .env | head -n1)
+  PROXY_BASE=$(sed -n 's/^LOCAL_PROXY_BASE_URL=//p' .env | head -n1)
+  CERT_EMAIL=$(sed -n 's/^CERTIFICATE_EMAIL=//p' .env | head -n1)
+  PANEL_DOMAIN=$(printf '%s' "$PANEL_BASE" | sed -n 's#^https://\([^/:]*\)/\?$#\1#p')
+  PROXY_DOMAIN=$(printf '%s' "$PROXY_BASE" | sed -n 's#^https://\([^/:]*\)/\?$#\1#p')
+  [ -n "$PROXY_DOMAIN" ] || PROXY_DOMAIN="$PANEL_DOMAIN"
+  NGINX_REFRESHED=0
+  if [ -n "$PANEL_DOMAIN" ] && [ -n "$CERT_EMAIL" ]; then
+    if [ "$PROXY_DOMAIN" != "$PANEL_DOMAIN" ]; then
+      if sh scripts/configure-local-domain.sh "$PROXY_DOMAIN" "$CERT_EMAIL"; then NGINX_REFRESHED=1; fi
+    elif sh scripts/configure-domain.sh "$PANEL_DOMAIN" "$CERT_EMAIL"; then NGINX_REFRESHED=1
+    fi
+  fi
+  if [ "$NGINX_REFRESHED" -eq 1 ]; then
+    echo "AegisRelay 已更新并重新启动；现有密钥与数据保持不变，Nginx 流媒体调优已同步。"
+  else
+    echo "AegisRelay 已更新并重新启动，现有密钥与数据保持不变。"
+    echo "当前未自动重建 HTTPS 站点；如已配置域名，请执行 sudo aegis-relay domain 以同步 Nginx 调优。"
+  fi
 fi

@@ -19,9 +19,14 @@ const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 // real stream domain. Only operator-declared stream hosts are ever reachable through it (SSRF guard).
 const RELAY_VOD_SEGMENT = '.aegis-vod';
 const runtime = new Map();
+// A larger socket backpressure window avoids repeatedly stopping the zero-copy pipeline after only
+// a few small chunks on high-bandwidth/high-latency routes. It is a threshold (allocated on demand),
+// not a per-connection reservation, and stays deliberately bounded for small VPSes.
+export const RELAY_HIGH_WATER_MARK=256*1024;
+export const RELAY_SERVER_OPTIONS=Object.freeze({highWaterMark:RELAY_HIGH_WATER_MARK,noDelay:true,keepAlive:true,keepAliveInitialDelay:15_000});
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
-const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo' };
+const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
 const CONNECT_TIMEOUT_MS=10_000;
