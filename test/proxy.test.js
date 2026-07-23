@@ -111,3 +111,32 @@ test('a final upstream 502 remains visible in runtime diagnostics',async()=>{con
 test('domain upstreams work with Node all-address connection attempts',async()=>{const upstream=http.createServer((q,s)=>s.end('domain-ok')),up=await listenAny(upstream),key=deriveKey('d'.repeat(32)),route={id:'domain',alias:'domain',enabled:true,accessMode:'alias_only',upstreams:[`http://localhost:${up}`],allowPrivate:true},store={data:{routes:[route]}},relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);assert.equal(await(await fetch(`http://127.0.0.1:${port}/domain/System/Info`)).text(),'domain-ok');await close(relay);await close(upstream)});
 test('admin cookie and CSRF token are stripped before proxying',()=>{const headers={cookie:'emby_session=media; aegis_session=admin-secret; theme=dark','x-csrf-token':'csrf-secret'};assert.deepEqual(stripAdminCredentials(headers),{cookie:'emby_session=media; theme=dark'})});
 test('upstreams cannot overwrite the root-scoped admin cookie',()=>{const headers={'set-cookie':['emby_session=media; Path=/','aegis_session=attacker; Path=/']};assert.deepEqual(stripAdminSetCookies(headers),{'set-cookie':['emby_session=media; Path=/']})});
+
+test('emulation forces one consistent client and a stable single device across every signal',async()=>{
+  const seen=[];const upstream=http.createServer((q,s)=>{seen.push({url:q.url,headers:q.headers});s.end('ok')}),up=await listen(upstream),key=deriveKey('e'.repeat(32));
+  const store={data:{routes:[{id:'emu',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,clientProfile:{enabled:true,userAgent:'SenPlayer/1.2.0',client:'SenPlayer',deviceName:'SenPlayer'}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  await request(port,'/emu/Videos/1/stream?X-Emby-Client=Fileball&DeviceId=real-abc&api_key=keepme',{headers:{'x-emby-authorization':'MediaBrowser Client="Fileball", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"','x-emby-client':'Fileball','x-emby-device-id':'real-abc'}});
+  await request(port,'/emu/Videos/2/stream?DeviceId=other-xyz&api_key=keepme',{headers:{authorization:'MediaBrowser Client="Infuse", Device="iPad", DeviceId="other-xyz", Version="8.1", Token="tok2"','x-emby-device-id':'other-xyz'}});
+  const a=seen[0],b=seen[1],id=a.headers['x-emby-device-id'];
+  assert.equal(a.headers['user-agent'],'SenPlayer/1.2.0');
+  assert.equal(a.headers['x-emby-client'],'SenPlayer');
+  assert.equal(a.headers['x-emby-device-name'],'SenPlayer');
+  assert.equal(a.headers['x-emby-client-version'],'1.2.0');
+  assert.match(id,/^[0-9a-f]{32}$/);
+  // the auth header's identity is rewritten but the real Token is preserved
+  assert.match(a.headers['x-emby-authorization'],/Client="SenPlayer"/);
+  assert.match(a.headers['x-emby-authorization'],/Device="SenPlayer"/);
+  assert.match(a.headers['x-emby-authorization'],new RegExp('DeviceId="'+id+'"'));
+  assert.match(a.headers['x-emby-authorization'],/Version="1.2.0"/);
+  assert.match(a.headers['x-emby-authorization'],/Token="secret-token"/);
+  // identity query params rewritten, api_key kept
+  assert.match(a.url,/X-Emby-Client=SenPlayer/);
+  assert.match(a.url,new RegExp('DeviceId='+id));
+  assert.match(a.url,/api_key=keepme/);
+  // a different real client still maps to the SAME device id, and its token is preserved
+  assert.equal(b.headers['x-emby-device-id'],id);
+  assert.match(b.headers['authorization'],/Client="SenPlayer"/);
+  assert.match(b.headers['authorization'],/Token="tok2"/);
+  await close(relay);await close(upstream);
+});
