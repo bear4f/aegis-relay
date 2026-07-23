@@ -137,40 +137,16 @@ export function getRuntimeStatus(routes) {
   }) }));
 }
 
-function embyClientVersion(userAgent){const m=String(userAgent||'').match(/\/(\d+(?:\.\d+)*)/);return m?m[1]:'';}
-// The client identity the upstream should see for this node when emulation is on. The device id is
-// deliberately left to each real client — so whatever player the viewer uses is reported as the one
-// emulated client, but different devices stay distinct Emby devices and never interrupt each other.
-// Only an explicitly configured Device ID overrides the real one.
-function embyIdentity(route){
-  const p=route.clientProfile;if(!p||p.enabled!==true)return null;
-  return {userAgent:p.userAgent||'',client:p.client||'',deviceName:p.deviceName||'',
-    deviceId:p.deviceId||'',version:embyClientVersion(p.userAgent)};
-}
-// Rewrite Client/Device/DeviceId/Version inside the MediaBrowser auth header but keep the Token.
-// Leaving these as the real client's values while the X-Emby-* headers say something else makes the
-// upstream see a self-contradictory client — which is what broke playback on some servers.
-function rewriteAuthIdentity(value,id){
-  if(typeof value!=='string'||!/^\s*(MediaBrowser|Emby)\b/i.test(value))return value;
-  const setField=(s,k,v)=>{if(!v)return s;const re=new RegExp('('+k+'=")[^"]*(")','i');return re.test(s)?s.replace(re,'$1'+v+'$2'):s+', '+k+'="'+v+'"';};
-  let out=value;out=setField(out,'Client',id.client);out=setField(out,'Device',id.deviceName);out=setField(out,'DeviceId',id.deviceId);out=setField(out,'Version',id.version);return out;
-}
-// Some Emby stream URLs carry identity in the query string; keep tokens (api_key / X-Emby-Token)
-// untouched but replace any identity params that are present so every signal agrees.
-function rewriteIdentityQuery(search,id){
-  if(!search)return search;let out=search;
-  const sub=(k,v)=>{if(!v)return;out=out.replace(new RegExp('([?&]'+k+'=)[^&]*','ig'),'$1'+encodeURIComponent(v));};
-  sub('X-Emby-Client',id.client);sub('X-Emby-Device-Name',id.deviceName);sub('X-Emby-Device-Id',id.deviceId);sub('DeviceId',id.deviceId);if(id.client)sub('X-Emby-Client-Version',id.version);
-  return out;
-}
-function applyClientProfile(headers, identity) {
-  if(!identity)return;
-  if(identity.userAgent)headers['user-agent']=identity.userAgent;
-  if(identity.client)headers['x-emby-client']=identity.client;
-  if(identity.deviceName)headers['x-emby-device-name']=identity.deviceName;
-  if(identity.deviceId)headers['x-emby-device-id']=identity.deviceId;
-  if(identity.version&&identity.client)headers['x-emby-client-version']=identity.version;
-  for(const h of ['x-emby-authorization','authorization'])if(typeof headers[h]==='string')headers[h]=rewriteAuthIdentity(headers[h],identity);
+// Optional client-compatibility hint for upstreams you own or are authorized to proxy. This only
+// sets the declared X-Emby-* hint headers when the operator enables the profile; it deliberately
+// never rewrites the MediaBrowser auth header, the tokens, or the identity carried in query params.
+// Rewriting the authenticated Client/Device/Version desynchronizes the request from Emby's
+// token/session binding, which is exactly what broke playback on servers running device-management
+// or anti-proxy plugins — so the authenticated identity and tokens are always left untouched.
+function applyClientProfile(headers, profile = {}) {
+  if (!profile || profile.enabled !== true) return;
+  const mapping = { userAgent:'user-agent', client:'x-emby-client', deviceName:'x-emby-device-name', deviceId:'x-emby-device-id' };
+  for (const [field,header] of Object.entries(mapping)) if (profile[field]) headers[header]=profile[field];
 }
 
 function publicIndex(routes) {
@@ -268,12 +244,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     delete originalHeaders['x-forwarded-for']; delete originalHeaders.forwarded; delete originalHeaders['x-real-ip'];
     if(publicContext.host)originalHeaders['x-forwarded-host']=publicContext.host;
     originalHeaders['x-forwarded-proto']=publicContext.proto;
-    // When emulation is on, force one consistent client+device identity across every signal the
-    // upstream reads (headers, the auth header, and query params) so it can't see a contradictory
-    // client and always sees the same single device.
-    const identity=embyIdentity(route);
-    applyClientProfile(originalHeaders,identity);
-    const relaySearch=identity?rewriteIdentityQuery(incoming.search,identity):incoming.search;
+    // Apply the optional client-compat header hint (owned/authorized upstreams only). Query string
+    // is relayed verbatim — we never rewrite the authenticated identity or tokens.
+    applyClientProfile(originalHeaders,route.clientProfile);
+    const relaySearch=incoming.search;
     const canRetry=safeMethod(req.method); let finished=false, clientGone=false, activeUp=null;
     // Emby clients abort constantly (seeking, stopping, backgrounding). Nginx tears the upstream
     // down with the client; without this the upstream kept streaming into a dead socket and leaked
@@ -359,10 +333,9 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
 export function handleUpgrade(req, socket, head, routeSource, key) {
   const found=routeFor(req,routesFrom(routeSource),key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const identity=embyIdentity(found.route);
-  const relaySearch=identity?rewriteIdentityQuery(new URL(req.url,'http://relay.invalid').search,identity):new URL(req.url,'http://relay.invalid').search;
+  const relaySearch=new URL(req.url,'http://relay.invalid').search;
   const target=joinTarget(targets[0],found.rest,relaySearch), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
-  delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,identity);
+  delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,found.route.clientProfile);
   if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;
   headers.host=target.host; headers.connection='Upgrade'; headers.upgrade=req.headers.upgrade;
   const transport=target.protocol==='https:'?https:http;

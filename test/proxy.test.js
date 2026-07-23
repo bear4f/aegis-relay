@@ -112,33 +112,23 @@ test('domain upstreams work with Node all-address connection attempts',async()=>
 test('admin cookie and CSRF token are stripped before proxying',()=>{const headers={cookie:'emby_session=media; aegis_session=admin-secret; theme=dark','x-csrf-token':'csrf-secret'};assert.deepEqual(stripAdminCredentials(headers),{cookie:'emby_session=media; theme=dark'})});
 test('upstreams cannot overwrite the root-scoped admin cookie',()=>{const headers={'set-cookie':['emby_session=media; Path=/','aegis_session=attacker; Path=/']};assert.deepEqual(stripAdminSetCookies(headers),{'set-cookie':['emby_session=media; Path=/']})});
 
-test('emulation forces one consistent client while each real device keeps its own device id',async()=>{
+test('compatibility profile sets hint headers but never rewrites the authenticated identity or query',async()=>{
+  // The compat profile is only a hint for upstreams you own/are authorized to proxy. It must leave
+  // the MediaBrowser auth header, tokens, and query identity byte-for-byte intact — rewriting them
+  // desyncs the request from Emby's token/session binding and breaks playback on anti-proxy servers.
   const seen=[];const upstream=http.createServer((q,s)=>{seen.push({url:q.url,headers:q.headers});s.end('ok')}),up=await listen(upstream),key=deriveKey('e'.repeat(32));
-  const store={data:{routes:[{id:'emu',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,clientProfile:{enabled:true,userAgent:'SenPlayer/1.2.0',client:'SenPlayer',deviceName:'SenPlayer'}}]}};
+  const store={data:{routes:[{id:'emu',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,clientProfile:{enabled:true,userAgent:'Compat UA',client:'Compat Client',deviceName:'Compat Device'}}]}};
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
-  await request(port,'/emu/Videos/1/stream?X-Emby-Client=Popcorn&DeviceId=real-abc&api_key=keepme',{headers:{'x-emby-authorization':'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"','x-emby-client':'Popcorn','x-emby-device-id':'real-abc'}});
-  await request(port,'/emu/Videos/2/stream?DeviceId=other-xyz&api_key=keepme',{headers:{authorization:'MediaBrowser Client="Infuse", Device="iPad", DeviceId="other-xyz", Version="8.1", Token="tok2"','x-emby-device-id':'other-xyz'}});
-  const a=seen[0],b=seen[1];
-  // whatever the real player, the upstream sees the one emulated client
-  assert.equal(a.headers['user-agent'],'SenPlayer/1.2.0');
-  assert.equal(a.headers['x-emby-client'],'SenPlayer');
-  assert.equal(a.headers['x-emby-device-name'],'SenPlayer');
-  assert.equal(a.headers['x-emby-client-version'],'1.2.0');
-  // the real device id is preserved (not merged into one shared device)
-  assert.equal(a.headers['x-emby-device-id'],'real-abc');
-  assert.match(a.headers['x-emby-authorization'],/Client="SenPlayer"/);
-  assert.match(a.headers['x-emby-authorization'],/Device="SenPlayer"/);
-  assert.match(a.headers['x-emby-authorization'],/DeviceId="real-abc"/);
-  assert.match(a.headers['x-emby-authorization'],/Version="1.2.0"/);
-  assert.match(a.headers['x-emby-authorization'],/Token="secret-token"/);
-  assert.match(a.url,/X-Emby-Client=SenPlayer/);
+  await request(port,'/emu/Videos/1/stream?X-Emby-Client=Popcorn&DeviceId=real-abc&api_key=keepme',{headers:{'x-emby-authorization':'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"'}});
+  const a=seen[0];
+  // declared compat hint headers are applied
+  assert.equal(a.headers['user-agent'],'Compat UA');
+  assert.equal(a.headers['x-emby-client'],'Compat Client');
+  assert.equal(a.headers['x-emby-device-name'],'Compat Device');
+  // authenticated identity, token, and query are passed through unchanged
+  assert.equal(a.headers['x-emby-authorization'],'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"');
+  assert.match(a.url,/X-Emby-Client=Popcorn/);
   assert.match(a.url,/DeviceId=real-abc/);
   assert.match(a.url,/api_key=keepme/);
-  // a different real device stays a DISTINCT device, still reported as the same client
-  assert.equal(b.headers['x-emby-device-id'],'other-xyz');
-  assert.notEqual(b.headers['x-emby-device-id'],a.headers['x-emby-device-id']);
-  assert.match(b.headers['authorization'],/Client="SenPlayer"/);
-  assert.match(b.headers['authorization'],/DeviceId="other-xyz"/);
-  assert.match(b.headers['authorization'],/Token="tok2"/);
   await close(relay);await close(upstream);
 });
