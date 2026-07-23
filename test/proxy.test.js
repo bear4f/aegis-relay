@@ -6,6 +6,24 @@ const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),
 const listenAny=s=>new Promise(r=>s.listen(0,()=>r(s.address().port)));
 const request=(port,path,{method='GET',headers={},body}={})=>new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port,path,method,headers},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);if(body)req.write(body);req.end()});
 test('relay servers use the shared bounded high-throughput socket window',()=>{assert.equal(RELAY_HIGH_WATER_MARK,256*1024);assert.equal(RELAY_SERVER_OPTIONS.highWaterMark,RELAY_HIGH_WATER_MARK);assert.equal(RELAY_SERVER_OPTIONS.noDelay,true);assert.equal(RELAY_SERVER_OPTIONS.keepAlive,true)});
+test('media bodies use a clean upstream connection instead of reusing the preceding API socket',async()=>{
+  const sockets=[];const upstream=http.createServer((q,s)=>{sockets.push({url:q.url,port:q.socket.remotePort,connection:q.headers.connection});s.end(q.url.includes('/Videos/')?'media':'api')}),up=await listen(upstream),key=deriveKey('q'.repeat(32));
+  const store={data:{routes:[{id:'clean-media',alias:'clean-media',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/System/Info`)).text(),'api');
+  assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Videos/1/stream.mp4`,{headers:{range:'bytes=0-'}})).text(),'media');
+  assert.equal(sockets.length,2);assert.notEqual(sockets[0].port,sockets[1].port);assert.equal(sockets[1].connection,'close');
+  await close(relay);await close(upstream);
+});
+test('an unlimited media response forwards its first small chunk before the origin finishes',async()=>{
+  const first=Buffer.alloc(4096,0x11),rest=Buffer.alloc(256*1024,0x22);let release;
+  const upstream=http.createServer((_q,s)=>{s.writeHead(206,{'content-type':'video/mp4','content-range':`bytes 0-${first.length+rest.length-1}/${first.length+rest.length}`});s.write(first);release=()=>s.end(rest)}),up=await listen(upstream),key=deriveKey('w'.repeat(32));
+  const store={data:{routes:[{id:'first-byte',alias:'first-byte',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const result=await new Promise((resolve,reject)=>{const chunks=[];let sawFirst=false;const q=http.get({hostname:'127.0.0.1',port,path:'/first-byte/Videos/1/stream.mp4',headers:{range:'bytes=0-'}},r=>{r.on('data',chunk=>{chunks.push(chunk);if(!sawFirst){sawFirst=true;assert.equal(chunk.subarray(0,first.length).equals(first),true);setTimeout(release,10)}});r.on('end',()=>resolve(Buffer.concat(chunks)))});q.on('error',reject)});
+  assert.equal(result.length,first.length+rest.length);assert.equal(result.subarray(0,first.length).equals(first),true);assert.equal(result.subarray(first.length).equals(rest),true);
+  await close(relay);await close(upstream);
+});
 test('proxy accepts short root alias and legacy /r capability paths',async()=>{const seen=[];const upstream=http.createServer((req,res)=>{seen.push(req.url);res.end('ok')});const upPort=await listen(upstream),key=deriveKey('p'.repeat(32));const store={data:{routes:[{id:'a',alias:'home',enabled:true,upstreams:[`http://127.0.0.1:${upPort}`],accessMode:'key',allowPrivate:true,tlsVerify:true,keyDigest:tokenDigest('capability',key)}]}};const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);for(const path of ['/home/capability/emby/Items?x=1','/r/home/capability/System/Info']){const good=await fetch(`http://127.0.0.1:${port}${path}`);assert.equal(good.status,200);assert.equal(await good.text(),'ok')}assert.deepEqual(seen,['/emby/Items?x=1','/System/Info']);assert.equal((await fetch(`http://127.0.0.1:${port}/home/wrong/`)).status,404);await close(relay);await close(upstream)});
 test('proxy validates migrated nodes without the application master key',async()=>{
   const upstream=http.createServer((req,res)=>res.end('decoupled'));

@@ -24,8 +24,11 @@ const runtime = new Map();
 // not a per-connection reservation, and stays deliberately bounded for small VPSes.
 export const RELAY_HIGH_WATER_MARK=256*1024;
 export const RELAY_SERVER_OPTIONS=Object.freeze({highWaterMark:RELAY_HIGH_WATER_MARK,noDelay:true,keepAlive:true,keepAliveInitialDelay:15_000});
-// Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
-// connection to a distant origin each time added seconds of buffering before the first byte.
+// Reuse warm upstream connections for short API traffic. Media requests deliberately do not share
+// this pool: the proven toolbox Nginx path sends Connection: close, and some Emby frontends/CDNs
+// stall after a few KiB when an API keep-alive socket is immediately reused for a long media body.
+// A playback request gets one clean origin connection for its lifetime; HLS segments and seeks are
+// independent requests, so a bad/stale connection can never contaminate the next one.
 const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
@@ -381,8 +384,9 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
       const target=directTarget||joinTarget(targetValue,found.rest,relaySearch), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
-      const secure=target.protocol==='https:';
-      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),agent:freshSocket?false:(secure?httpsAgent:httpAgent)};
+      const secure=target.protocol==='https:',usesPool=!playback&&!freshSocket;
+      if(playback)requestHeaders.connection='close';
+      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:usesPool?(secure?httpsAgent:httpAgent):false};
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
@@ -410,8 +414,8 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         let measured=false,streamed=0;
         const finishMetric=()=>{if(measured)return;measured=true;metricDone?.(status,metricDone?.addBytes?0:streamed,status>=500)};
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
-        // half-open response. Only tear the socket down on failure; a cleanly finished response
-        // returns to the pool so the next Range request (a seek) skips the TCP+TLS handshake.
+        // half-open response. Short API responses may return their connection to the API pool;
+        // playback connections are intentionally one-shot and close after the media response.
         // pipe upRes through any transforms, then to the client. `stages` is [source, ...transforms];
         // nothing is ever fully buffered, so the client starts receiving bytes immediately.
         const deliver=(...stages)=>{
@@ -425,8 +429,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
           }else{
             // No rate limit means no throttling transform. Count bytes off the last stage (what the
             // client actually receives) with a listener instead of parking a transform in the path.
-            tail.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
+            // Attach pipeline first: adding a data listener puts a pre-buffered IncomingMessage into
+            // flowing mode, so the destination must already be subscribed before accounting begins.
             pipeline(...stages,res,done);
+            tail.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
           }
         };
         // The stream-URL rewrite only touches API bodies and explicit HLS/DASH manifests. Every other
@@ -466,7 +472,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
         // A pooled connection the origin had already closed dies on reuse. Retry the same upstream
         // once on a brand-new socket before treating it as a real failure.
-        const staleSocket=!freshSocket&&!finished&&canRetry&&!res.headersSent;
+        const staleSocket=usesPool&&!finished&&canRetry&&!res.headersSent;
         if (staleSocket) return attempt(targetValue,index,true);
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
