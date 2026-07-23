@@ -184,6 +184,17 @@ test('rewrite never touches the media path: Range/206 responses stream through u
   await close(relay);await close(upstream);
 });
 
+test('streaming rewrite reassembles a stream URL split across chunk boundaries',async()=>{
+  // The rewrite streams (never buffers); a URL straddling two data chunks must still be rewritten
+  // whole, and nothing before it should be withheld longer than the short carry.
+  const upstream=http.createServer((q,s)=>{s.writeHead(200,{'content-type':'application/json'});s.write('{"a":"https://vod.exa');setImmediate(()=>s.end('mple.net/movie.mp4","b":"keep"}'))}),up=await listen(upstream),key=deriveKey('c'.repeat(32));
+  const store={data:{routes:[{id:'c',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const t=(await request(port,'/emu/Items/1',{headers:{host:'relay.test','x-forwarded-proto':'https'}})).body.toString();
+  assert.equal(t,'{"a":"https://relay.test/emu/.aegis-vod/https/vod.example.net/movie.mp4","b":"keep"}');
+  await close(relay);await close(upstream);
+});
+
 test('rewrite decodes a gzip-compressed API body before rewriting stream URLs',async()=>{
   const zlib=await import('node:zlib');
   const upstream=http.createServer((q,s)=>{const body=zlib.gzipSync(JSON.stringify({url:'https://vod.example.net/a.mp4'}));s.writeHead(200,{'content-type':'application/json','content-encoding':'gzip','content-length':String(body.length)});s.end(body)}),up=await listen(upstream),key=deriveKey('z'.repeat(32));

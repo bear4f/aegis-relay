@@ -2,7 +2,8 @@ import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { pipeline, Readable } from 'node:stream';
+import { pipeline, Transform } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
 import { isRouteAuthKey, verifyRouteToken } from './route-auth.js';
@@ -17,10 +18,6 @@ const RELAY_REDIRECT_SEGMENT = '.aegis-relay';
 // relay under a dedicated path so the client never leaves our domain, and proxy the path back to the
 // real stream domain. Only operator-declared stream hosts are ever reachable through it (SSRF guard).
 const RELAY_VOD_SEGMENT = '.aegis-vod';
-// Cap on how much of a "text" response we buffer to rewrite. Emby API/manifest bodies are tiny; video
-// is never a rewritable content-type. Past the cap we stop buffering and stream the rest untouched so
-// a mislabeled huge body can never blow up memory.
-const STREAM_REWRITE_CAP = 16 * 1024 * 1024;
 const runtime = new Map();
 // Reuse warm upstream connections. Every seek is a fresh Range request, and opening a new TCP+TLS
 // connection to a distant origin each time added seconds of buffering before the first byte.
@@ -205,36 +202,48 @@ function buildStreamRewriter(route, publicContext, prefix) {
   const base=`${publicContext.proto}://${publicContext.host}${prefix}/${RELAY_VOD_SEGMENT}/`;
   const wsBase=`${publicContext.proto==='https'?'wss':'ws'}://${publicContext.host}${prefix}/${RELAY_VOD_SEGMENT}/`;
   const alt=domains.map(d=>d.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|');
-  const re=new RegExp('(https?|wss?):\\/\\/('+alt+')(:\\d+)?(?=[/"\'?#\\\\]|$)','gi');
-  return text=>text.replace(re,(m,scheme,host,port)=>{
-    const s=scheme.toLowerCase(), secure=s==='https'||s==='wss', ws=s==='ws'||s==='wss';
-    return (ws?wsBase:base)+(secure?'https':'http')+'/'+host+(port||'');
-  });
-}
-// Stream the already-buffered head, then the remainder of the source, as one readable — used only
-// when a text body overran the rewrite cap and must be delivered untouched without re-buffering.
-function chainStream(chunks, tail) {
-  return Readable.from((async function*(){ for(const c of chunks) yield c; for await(const c of tail) yield c; })());
+  const regex=new RegExp('(https?|wss?):\\/\\/('+alt+')(:\\d+)?(?=[/"\'?#\\\\]|$)','g');
+  const replacer=m=>{ const s=m[1].toLowerCase(), secure=s==='https'||s==='wss', ws=s==='ws'||s==='wss';
+    return (ws?wsBase:base)+(secure?'https':'http')+'/'+m[2]+(m[3]||''); };
+  // Longest possible match: scheme + longest declared host + ":65535". Carry this many trailing chars
+  // between chunks so a URL split across chunk boundaries is never mis-emitted.
+  const keep=Math.max(...domains.map(d=>d.length))+16;
+  return { regex, replacer, keep };
 }
 function isRewritableType(contentType) {
   const ct=String(contentType||'').toLowerCase();
   return /^text\//.test(ct) || /(json|xml|javascript|ecmascript|mpegurl|dash\+xml)/.test(ct);
 }
-// Decode a (small) rewritable body so its embedded URLs can be rewritten. We no longer force the
-// upstream to skip compression — that would bloat every response — so the few bodies we do rewrite
-// may arrive compressed and are decompressed here. Async on purpose: a synchronous gunzip/brotli of a
-// large body would block the event loop and stall every concurrent video stream on the process.
-// rejects on an encoding we can't handle so the caller can pass the original bytes through untouched.
-function decodeBody(buf, encoding) {
+// A streaming stream-URL rewriter. It never buffers the whole body — it rewrites matches as bytes
+// flow through and only holds back a short tail (a possible partial URL at a chunk boundary), so the
+// client starts receiving the response immediately. This keeps playback start fast and can never
+// stall a stream, even if a body is large or a response is misclassified as rewritable.
+class StreamRewrite extends Transform {
+  constructor({regex,replacer,keep}){ super(); this.regex=regex; this.replacer=replacer; this.keep=keep; this.decoder=new StringDecoder('utf8'); this.carry=''; }
+  _transform(chunk,_enc,cb){
+    const s=this.carry+this.decoder.write(chunk);
+    if(s.length<=this.keep){ this.carry=s; return cb(); }
+    const safe=s.length-this.keep; this.regex.lastIndex=0;
+    let out='',lastEnd=0,m;
+    while((m=this.regex.exec(s))){
+      if(m.index>=safe)break;              // starts in the carry zone — might be incomplete, defer it
+      out+=s.slice(lastEnd,m.index)+this.replacer(m); lastEnd=m.index+m[0].length;
+    }
+    const emitEnd=Math.max(lastEnd,safe);
+    out+=s.slice(lastEnd,emitEnd); this.carry=s.slice(emitEnd);
+    if(out)this.push(out); cb();
+  }
+  _flush(cb){ const s=this.carry+this.decoder.end(); this.regex.lastIndex=0; this.push(s.replace(this.regex,(...a)=>this.replacer(a))); cb(); }
+}
+// Streaming decompressor matched to the body's encoding, or null for identity/none. Undefined return
+// means an encoding we can't decode — the caller then streams the body through untouched.
+function decompressor(encoding){
   const e=String(encoding||'').toLowerCase();
-  return new Promise((resolve,reject)=>{
-    if(!e||e==='identity')return resolve(buf);
-    const cb=(err,out)=>err?reject(err):resolve(out);
-    if(e==='gzip'||e==='x-gzip')return zlib.gunzip(buf,cb);
-    if(e==='deflate')return zlib.inflate(buf,cb);
-    if(e==='br')return zlib.brotliDecompress(buf,cb);
-    reject(new Error('unsupported content-encoding'));
-  });
+  if(!e||e==='identity')return null;
+  if(e==='gzip'||e==='x-gzip')return zlib.createGunzip();
+  if(e==='deflate')return zlib.createInflate();
+  if(e==='br')return zlib.createBrotliDecompress();
+  return undefined;
 }
 
 function externalRedirectPath(location, base) {
@@ -379,46 +388,36 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
         // half-open response. Only tear the socket down on failure; a cleanly finished response
         // returns to the pool so the next Range request (a seek) skips the TCP+TLS handshake.
-        const deliver=source=>{
+        // pipe upRes through any transforms, then to the client. `stages` is [source, ...transforms];
+        // nothing is ever fully buffered, so the client starts receiving bytes immediately.
+        const deliver=(...stages)=>{
           res.writeHead(status,out);
           const done=err=>{ if(err&&!up.destroyed)up.destroy(); finishMetric(); };
+          const tail=stages[stages.length-1];
           if(speed>0){
             const counter=new ThrottleTransform(speed*1024*1024/8,bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)});
-            pipeline(source,counter,res,done);
+            pipeline(...stages,counter,res,done);
           }else{
-            // No rate limit means no transform. A Transform defaults to a 16 KiB high water mark, so
-            // parking one in front of every response throttled full-speed playback to that buffer and
-            // added a pause/resume cycle per chunk. Count bytes with a listener instead.
-            source.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
-            pipeline(source,res,done);
+            // No rate limit means no throttling transform. Count bytes off the last stage (what the
+            // client actually receives) with a listener instead of parking a transform in the path.
+            tail.on('data',chunk=>{streamed+=chunk.length;metricDone?.addBytes?.(chunk.length)});
+            pipeline(...stages,res,done);
           }
         };
-        // The stream-URL rewrite only applies to small text/manifest/API bodies. Media — any Range
-        // request, a 206 Partial Content, a HEAD, or a bodyless status — is never buffered or
-        // altered, so playback start, throughput and seeking stay identical to a node with no
-        // rewriting. Compressed rewritable bodies are decoded (not forced off upstream-wide).
-        const enc=String(out['content-encoding']||'').toLowerCase();
-        const decodable=!enc||['identity','gzip','x-gzip','deflate','br'].includes(enc);
+        // The stream-URL rewrite only touches text/manifest/API bodies. Media — any Range request, a
+        // 206 Partial Content, a HEAD, or a bodyless status — is passed straight through untouched, so
+        // playback start, throughput and seeking are identical to a node with no rewriting. The
+        // rewrite itself streams (never buffers), decompressing on the fly when the body is encoded.
+        const enc=out['content-encoding'];
         const mediaResponse=!!req.headers.range||req.method==='HEAD'||status===206||status===204||status===304;
-        if (rewriter && !mediaResponse && decodable && isRewritableType(out['content-type'])) {
-          // Buffer the (small) body, rewrite embedded stream URLs, then deliver. Length changes, so
-          // drop the upstream content-length and the (now removed) encoding and let it chunk.
-          const chunks=[]; let size=0;
-          const onData=chunk=>{
-            chunks.push(chunk); size+=chunk.length;
-            if(size>STREAM_REWRITE_CAP){ upRes.pause(); upRes.off('data',onData); upRes.off('end',onEnd); delete out['content-length']; deliver(chainStream(chunks,upRes)); }
-          };
-          const onEnd=async()=>{
-            let text;
-            try{ text=(await decodeBody(Buffer.concat(chunks,size),enc)).toString('utf8'); }
-            catch{ if(!res.headersSent&&!res.destroyed)deliver(Readable.from(chunks)); return; } // undecodable — pass the original bytes through untouched
-            if(res.destroyed||res.headersSent){ finishMetric(); return; } // client left during decode
-            const outBuf=Buffer.from(rewriter(text),'utf8');
-            delete out['content-encoding']; out['content-length']=String(outBuf.length);
-            deliver(Readable.from([outBuf]));
-          };
-          upRes.on('data',onData); upRes.on('end',onEnd);
-          upRes.on('error',()=>{ if(!up.destroyed)up.destroy(); finishMetric(); });
+        const gunzip=rewriter&&!mediaResponse&&isRewritableType(out['content-type'])?decompressor(enc):null;
+        if (rewriter && !mediaResponse && gunzip!==undefined && isRewritableType(out['content-type'])) {
+          // Length and encoding change as we rewrite/decompress, so drop them and let the response chunk.
+          delete out['content-encoding']; delete out['content-length'];
+          const rewrite=new StreamRewrite(rewriter);
+          // pipeline (inside deliver) tears every stage down together if the decoder hits a mislabeled
+          // body, so a bad response fails cleanly instead of stalling.
+          deliver(...(gunzip?[upRes,gunzip,rewrite]:[upRes,rewrite]));
         } else deliver(upRes);
       });
       activeUp=up;
