@@ -144,7 +144,7 @@
         <label>维护提醒周期（天）<input id="reminder-days" type="number" min="0" max="365" placeholder="0 = 不提醒"></label>
         <label class="full">管理员备注<textarea id="notes" placeholder="仅管理员可见"></textarea></label>
       </div>
-      <div class="form-section"><div><h3>获授权的客户端兼容</h3><p>仅用于你拥有或已获授权的上游；不会修改 Emby 登录凭据。开启后，无论客户端用什么软件，上游只会看到这里模拟的这一个客户端，并始终识别为同一台设备。</p></div><label class="switch-row"><span>启用兼容请求头</span><input id="profile-enabled" type="checkbox"></label><p class="preset-hint">选择一个客户端身份模板快速填充，或在下方手动微调。</p><div id="profile-presets" class="preset-row"></div><div class="form-grid"><label>User-Agent<input id="profile-ua"></label><label>X-Emby-Client<input id="profile-client"></label><label>设备名称<input id="profile-device"></label><label>设备 ID<input id="profile-device-id" placeholder="留空＝该节点自动固定"><small>留空则本节点自动生成一个固定不变的设备标识，让上游始终识别为同一设备。</small></label></div></div>
+      <div class="form-section"><div><h3>获授权的客户端兼容</h3><p>仅用于你拥有或已获授权的上游；不会修改 Emby 登录凭据。开启后，无论用什么播放软件（如网易云爆米花），上游都只会识别为这里模拟的这一个客户端（如 SenPlayer）。各设备仍保留各自的设备标识，互不干扰、不会互相打断。</p></div><label class="switch-row"><span>启用兼容请求头</span><input id="profile-enabled" type="checkbox"></label><p class="preset-hint">选择一个客户端身份模板快速填充，或在下方手动微调。</p><div id="profile-presets" class="preset-row"></div><div class="form-grid"><label>User-Agent<input id="profile-ua"></label><label>X-Emby-Client<input id="profile-client"></label><label>设备名称<input id="profile-device"></label><label>设备 ID<input id="profile-device-id" placeholder="留空＝保留各设备真实标识"><small>一般留空：各真实设备保留自己的设备标识，互不干扰。仅在你确实想让多端合并成同一设备时才手动填写固定值。</small></label></div></div>
     </details>
   </div><div class="drawer-foot"><button id="cancel-edit" class="btn ghost">取消</button><button id="save-node" class="btn primary">创建节点</button></div></aside>
 

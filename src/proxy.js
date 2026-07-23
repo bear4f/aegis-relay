@@ -138,16 +138,14 @@ export function getRuntimeStatus(routes) {
 }
 
 function embyClientVersion(userAgent){const m=String(userAgent||'').match(/\/(\d+(?:\.\d+)*)/);return m?m[1]:'';}
-// A fixed, unguessable device id per node so every client that connects through it looks like the
-// same single device to the upstream, no matter which app the viewer actually uses.
-function stableDeviceId(route,appKey){
-  try{return crypto.createHmac('sha256',appKey).update('aegis-emby-device:'+(route.id||route.alias)).digest('hex').slice(0,32);}catch{return'';}
-}
-// The one identity the upstream should ever see for this node when emulation is on.
-function embyIdentity(route,appKey){
+// The client identity the upstream should see for this node when emulation is on. The device id is
+// deliberately left to each real client — so whatever player the viewer uses is reported as the one
+// emulated client, but different devices stay distinct Emby devices and never interrupt each other.
+// Only an explicitly configured Device ID overrides the real one.
+function embyIdentity(route){
   const p=route.clientProfile;if(!p||p.enabled!==true)return null;
   return {userAgent:p.userAgent||'',client:p.client||'',deviceName:p.deviceName||'',
-    deviceId:p.deviceId||stableDeviceId(route,appKey),version:embyClientVersion(p.userAgent)};
+    deviceId:p.deviceId||'',version:embyClientVersion(p.userAgent)};
 }
 // Rewrite Client/Device/DeviceId/Version inside the MediaBrowser auth header but keep the Token.
 // Leaving these as the real client's values while the X-Emby-* headers say something else makes the
@@ -273,7 +271,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     // When emulation is on, force one consistent client+device identity across every signal the
     // upstream reads (headers, the auth header, and query params) so it can't see a contradictory
     // client and always sees the same single device.
-    const identity=embyIdentity(route,key);
+    const identity=embyIdentity(route);
     applyClientProfile(originalHeaders,identity);
     const relaySearch=identity?rewriteIdentityQuery(incoming.search,identity):incoming.search;
     const canRetry=safeMethod(req.method); let finished=false, clientGone=false, activeUp=null;
@@ -361,7 +359,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
 export function handleUpgrade(req, socket, head, routeSource, key) {
   const found=routeFor(req,routesFrom(routeSource),key); if(!found)return socket.destroy();
   const targets=orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
-  const identity=embyIdentity(found.route,key);
+  const identity=embyIdentity(found.route);
   const relaySearch=identity?rewriteIdentityQuery(new URL(req.url,'http://relay.invalid').search,identity):new URL(req.url,'http://relay.invalid').search;
   const target=joinTarget(targets[0],found.rest,relaySearch), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,identity);
