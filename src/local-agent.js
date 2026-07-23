@@ -43,7 +43,7 @@ function open(payload, encodedKey) {
 
 export function runtimeRoutes(nodes) {
   return nodes.map(node=>({
-    id:node.id,alias:node.alias,name:node.name,enabled:node.enabled,upstreams:node.upstreams,playbackUpstreams:node.playbackUpstreams,
+    id:node.id,alias:node.alias,name:node.name,enabled:node.enabled,upstreams:node.upstreams,
     allowPrivate:node.allowPrivate,tlsVerify:node.tlsVerify,showOnHome:node.showOnHome,
     clientProfile:node.clientProfile,streamRewrite:node.streamRewrite,speedLimitMbps:node.speedLimitMbps,monthlyQuotaGB:node.monthlyQuotaGB,
     accessMode:node.access.mode,

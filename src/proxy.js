@@ -72,8 +72,7 @@ export async function validateUpstreamList(value, allowPrivate = false) {
   return result;
 }
 
-function normalizedUpstreams(route, playback = false) {
-  if (playback && route.playbackUpstreams?.length) return route.playbackUpstreams;
+function normalizedUpstreams(route) {
   if (route.upstreams?.length) return route.upstreams;
   return route.upstream ? [route.upstream] : [];
 }
@@ -131,18 +130,18 @@ function safeUpstreamError(error) {
   if(code==='EPROTO'||message.includes('wrong version number')||message.includes('ssl routines'))return'上游协议不匹配，请检查 HTTP/HTTPS';
   return'上游连接失败';
 }
-function orderedTargets(route, playback) {
+function orderedTargets(route) {
   // Deterministic order — always prefer the primary line. Rotating upstreams per request sent a
   // client's seeks to a different Emby server than the one holding its playback/transcode session,
   // which showed up as long buffering and dropped streams. Extra lines are failover, not balancing.
-  const all=normalizedUpstreams(route,playback);
+  const all=normalizedUpstreams(route);
   if (!all.length) return [];
   const available=all.filter(t=>stateFor(route,t).openUntil<=Date.now());
   return available.length?available:all;
 }
 
 export function getRuntimeStatus(routes) {
-  return routes.map(route => ({ id:route.id, alias:route.alias, upstreams:[...normalizedUpstreams(route),...normalizedUpstreams(route,true).filter(x=>!normalizedUpstreams(route).includes(x))].map(target=>{
+  return routes.map(route => ({ id:route.id, alias:route.alias, upstreams:normalizedUpstreams(route).map(target=>{
     const s=stateFor(route,target); return { target:'[encrypted upstream]', failures:s.failures, circuitOpen:s.openUntil>Date.now(), retryAt:s.openUntil?new Date(s.openUntil).toISOString():null, lastSuccess:s.lastSuccess, lastError:s.lastError };
   }) }));
 }
@@ -308,7 +307,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     try { continuation=continuationTarget(found,key); vod=vodTarget(found,incoming.search); }
     catch { res.writeHead(404,{'cache-control':'no-store'});return res.end('not found'); }
     const {route}=found, playback=continuation?.playback===true||!!vod||isPlaybackPath(found.rest);
-    const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route,playback);
+    const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
@@ -338,7 +337,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
 
     // Declared stream hosts are trusted parts of the same deployment, so keep credentials flowing to
     // them just like the configured upstreams (the /.aegis-vod/ proxy target lives on one of these).
-    const routeOrigins=new Set([...normalizedUpstreams(route),...normalizedUpstreams(route,true),...streamRewriteDomains(route).flatMap(h=>[`https://${h}`,`http://${h}`])].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
+    const routeOrigins=new Set([...normalizedUpstreams(route),...streamRewriteDomains(route).flatMap(h=>[`https://${h}`,`http://${h}`])].map(value=>{try{return new URL(value).origin}catch{return''}}).filter(Boolean));
     const attempt=(targetValue,index,freshSocket=false)=>{
       if (finished || clientGone) return;
       const directTarget=(continuation&&index===0&&continuation.target)||(vod&&index===0&&vod.target)||null;
@@ -446,7 +445,7 @@ export function handleUpgrade(req, socket, head, routeSource, key) {
   // A rewritten live socket (wss://…/.aegis-vod/<host>/…) tunnels straight to the declared stream
   // host; otherwise use the node's primary upstream. An unknown/blocked stream host is dropped.
   let vod; try { vod=vodTarget(found,relaySearch); } catch { return socket.destroy(); }
-  const targets=vod?[vod.target.href]:orderedTargets(found.route,false); if(!targets.length)return socket.destroy();
+  const targets=vod?[vod.target.href]:orderedTargets(found.route); if(!targets.length)return socket.destroy();
   const target=vod?vod.target:joinTarget(targets[0],found.rest,relaySearch), publicContext=publicRequestContext(req), headers=stripAdminCredentials(strip(req.headers));
   delete headers['x-forwarded-for']; delete headers.forwarded; delete headers['x-real-ip']; applyClientProfile(headers,found.route.clientProfile);
   if(publicContext.host)headers['x-forwarded-host']=publicContext.host; headers['x-forwarded-proto']=publicContext.proto;
