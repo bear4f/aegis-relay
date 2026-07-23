@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { pipeline, Readable } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
@@ -220,6 +221,18 @@ function isRewritableType(contentType) {
   const ct=String(contentType||'').toLowerCase();
   return /^text\//.test(ct) || /(json|xml|javascript|ecmascript|mpegurl|dash\+xml)/.test(ct);
 }
+// Decode a (small) rewritable body so its embedded URLs can be rewritten. We no longer force the
+// upstream to skip compression — that would bloat every response — so the few bodies we do rewrite
+// may arrive compressed and are decompressed here. Throws on an encoding we can't handle so the
+// caller can fall back to passing the original bytes through untouched.
+function decodeBody(buf, encoding) {
+  const e=String(encoding||'').toLowerCase();
+  if(!e||e==='identity')return buf;
+  if(e==='gzip'||e==='x-gzip')return zlib.gunzipSync(buf);
+  if(e==='deflate')return zlib.inflateSync(buf);
+  if(e==='br')return zlib.brotliDecompressSync(buf);
+  throw new Error('unsupported content-encoding');
+}
 
 function externalRedirectPath(location, base) {
   const basePath=base.pathname.replace(/\/$/,'');
@@ -309,10 +322,10 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     // Apply the optional client-compat header hint (owned/authorized upstreams only). Query string
     // is relayed verbatim — we never rewrite the authenticated identity or tokens.
     applyClientProfile(originalHeaders,route.clientProfile);
-    // Rewriting embedded stream-domain URLs needs an unencoded body, so ask the upstream not to
-    // compress. Only enabled nodes pay this cost; everything else keeps upstream compression.
+    // Prepared only when the node opts into stream-URL rewriting; null (no effect) otherwise. We do
+    // NOT touch Accept-Encoding here — the media path and every non-rewritten response keep their
+    // normal compression, so playback speed on a rewrite-enabled node matches one without it.
     const rewriter=buildStreamRewriter(route,publicContext,found.prefix);
-    if(rewriter)originalHeaders['accept-encoding']='identity';
     const relaySearch=incoming.search;
     const canRetry=safeMethod(req.method); let finished=false, clientGone=false, activeUp=null;
     // Emby clients abort constantly (seeking, stopping, backgrounding). Nginx tears the upstream
@@ -377,16 +390,29 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
             pipeline(source,res,done);
           }
         };
-        const encoding=String(out['content-encoding']||'').toLowerCase();
-        if (rewriter && isRewritableType(out['content-type']) && (!encoding||encoding==='identity')) {
-          // Buffer the (small) text/manifest body, rewrite embedded stream URLs, then deliver. Length
-          // changes, so drop the upstream content-length and let the response chunk.
+        // The stream-URL rewrite only applies to small text/manifest/API bodies. Media — any Range
+        // request, a 206 Partial Content, a HEAD, or a bodyless status — is never buffered or
+        // altered, so playback start, throughput and seeking stay identical to a node with no
+        // rewriting. Compressed rewritable bodies are decoded (not forced off upstream-wide).
+        const enc=String(out['content-encoding']||'').toLowerCase();
+        const decodable=!enc||['identity','gzip','x-gzip','deflate','br'].includes(enc);
+        const mediaResponse=!!req.headers.range||req.method==='HEAD'||status===206||status===204||status===304;
+        if (rewriter && !mediaResponse && decodable && isRewritableType(out['content-type'])) {
+          // Buffer the (small) body, rewrite embedded stream URLs, then deliver. Length changes, so
+          // drop the upstream content-length and the (now removed) encoding and let it chunk.
           const chunks=[]; let size=0;
           const onData=chunk=>{
             chunks.push(chunk); size+=chunk.length;
             if(size>STREAM_REWRITE_CAP){ upRes.pause(); upRes.off('data',onData); upRes.off('end',onEnd); delete out['content-length']; deliver(chainStream(chunks,upRes)); }
           };
-          const onEnd=()=>{ const outBuf=Buffer.from(rewriter(Buffer.concat(chunks,size).toString('utf8')),'utf8'); out['content-length']=String(outBuf.length); deliver(Readable.from([outBuf])); };
+          const onEnd=()=>{
+            let text;
+            try{ text=decodeBody(Buffer.concat(chunks,size),enc).toString('utf8'); }
+            catch{ deliver(Readable.from(chunks)); return; } // undecodable — pass the original bytes through untouched
+            const outBuf=Buffer.from(rewriter(text),'utf8');
+            delete out['content-encoding']; out['content-length']=String(outBuf.length);
+            deliver(Readable.from([outBuf]));
+          };
           upRes.on('data',onData); upRes.on('end',onEnd);
           upRes.on('error',()=>{ if(!up.destroyed)up.destroy(); finishMetric(); });
         } else deliver(upRes);

@@ -170,3 +170,28 @@ test('stream-domain rewrite is scheme-qualified and boundary-guarded against loo
   assert.ok(t.includes('https://vod.example.net.evil.com/y'),t); // lookalike suffix is left untouched
   await close(relay);await close(upstream);
 });
+
+test('rewrite never touches the media path: Range/206 responses stream through unbuffered and unaltered',async()=>{
+  // A Range request is media — even on a rewrite-enabled node it must pass through byte-for-byte with
+  // its 206 status and headers, never buffered, so seeking/throughput are unaffected.
+  const upstream=http.createServer((q,s)=>{s.writeHead(206,{'content-type':'video/mp4','accept-ranges':'bytes','content-range':'bytes 0-4/1000','content-length':'5'});s.end('ABCDE')}),up=await listen(upstream),key=deriveKey('r'.repeat(32));
+  const store={data:{routes:[{id:'m',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:[`127.0.0.1:${up}`]}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const r=await request(port,'/emu/Videos/1/stream.mp4',{headers:{host:'relay.test',range:'bytes=0-4'}});
+  assert.equal(r.status,206);
+  assert.equal(r.headers['content-range'],'bytes 0-4/1000');
+  assert.equal(r.headers['content-length'],'5');
+  assert.equal(r.body.toString(),'ABCDE');
+  await close(relay);await close(upstream);
+});
+
+test('rewrite decodes a gzip-compressed API body before rewriting stream URLs',async()=>{
+  const zlib=await import('node:zlib');
+  const upstream=http.createServer((q,s)=>{const body=zlib.gzipSync(JSON.stringify({url:'https://vod.example.net/a.mp4'}));s.writeHead(200,{'content-type':'application/json','content-encoding':'gzip','content-length':String(body.length)});s.end(body)}),up=await listen(upstream),key=deriveKey('z'.repeat(32));
+  const store={data:{routes:[{id:'g',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const r=await request(port,'/emu/Items/1',{headers:{host:'relay.test','x-forwarded-proto':'https'}});
+  assert.equal(r.headers['content-encoding'],undefined); // re-served decoded
+  assert.ok(r.body.toString().includes('https://relay.test/emu/.aegis-vod/https/vod.example.net/a.mp4'),r.body.toString());
+  await close(relay);await close(upstream);
+});

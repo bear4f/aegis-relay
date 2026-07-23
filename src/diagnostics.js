@@ -21,4 +21,12 @@ export function probe(value,{allowPrivate=false,tlsVerify=true,timeout=8000}={})
   });
 }
 
-export async function diagnoseRoute(route){const main=route.upstreams?.length?route.upstreams:(route.upstream?[route.upstream]:[]),playback=route.playbackUpstreams?.length?route.playbackUpstreams:main;const options={allowPrivate:route.allowPrivate,tlsVerify:route.tlsVerify!==false};return{node:{id:route.id,alias:route.alias,name:route.name},main:await Promise.all(main.map(x=>probe(x,options))),playback:playback===main?null:await Promise.all(playback.map(x=>probe(x,options))),headerPreview:route.clientProfile?.enabled?{userAgent:route.clientProfile.userAgent||'',client:route.clientProfile.client||'',deviceName:route.clientProfile.deviceName||'',deviceId:route.clientProfile.deviceId?'[configured]':''}:{mode:'pass-through'}}}
+// The stream-rewrite (前后端分离推流) domains are proxied just like the upstreams, so diagnostics
+// probe them with the same logic. Config stores host or host:port with no scheme; stream domains are
+// served over HTTPS, so probe them as https reachability checks.
+function streamProbeTargets(route){
+  const sr=route?.streamRewrite;
+  if(!sr||sr.enabled!==true||!Array.isArray(sr.domains))return [];
+  return sr.domains.map(d=>String(d||'').trim().toLowerCase()).filter(Boolean).map(h=>`https://${h}`);
+}
+export async function diagnoseRoute(route){const main=route.upstreams?.length?route.upstreams:(route.upstream?[route.upstream]:[]),playback=route.playbackUpstreams?.length?route.playbackUpstreams:main;const options={allowPrivate:route.allowPrivate,tlsVerify:route.tlsVerify!==false};const streamTargets=streamProbeTargets(route);return{node:{id:route.id,alias:route.alias,name:route.name},main:await Promise.all(main.map(x=>probe(x,options))),playback:playback===main?null:await Promise.all(playback.map(x=>probe(x,options))),stream:streamTargets.length?await Promise.all(streamTargets.map(x=>probe(x,options))):null,headerPreview:route.clientProfile?.enabled?{userAgent:route.clientProfile.userAgent||'',client:route.clientProfile.client||'',deviceName:route.clientProfile.deviceName||'',deviceId:route.clientProfile.deviceId?'[configured]':''}:{mode:'pass-through'}}}
