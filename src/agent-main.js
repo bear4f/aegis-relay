@@ -15,7 +15,11 @@ import { telemetryFromMetrics } from './telemetry.js';
 
 const DATA_DIR=process.env.AGENT_DATA_DIR||'/app/agent-data',IDENTITY_FILE=path.join(DATA_DIR,'identity.json'),CURRENT_FILE=path.join(DATA_DIR,'current.snapshot'),PREVIOUS_FILE=path.join(DATA_DIR,'previous.snapshot'),METRICS_FILE=path.join(DATA_DIR,'metrics.enc');
 const DOMAIN_REQUEST_FILE=path.join(DATA_DIR,'host-domain-request.json'),DOMAIN_STATUS_FILE=path.join(DATA_DIR,'host-domain-status.json');
-const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=process.env.AGENT_VERSION||'0.8.0',PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
+// Read the version from the package.json baked into this image, so the version the agent reports
+// always matches the code it is actually running — an upgrade rebuilds the image, so a bumped version
+// on the panel is proof the new build is live. Fall back to the env/hardcoded value if unreadable.
+function codeVersion(){try{return JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;}catch{return process.env.AGENT_VERSION||'0.0.0';}}
+const PANEL_URL=cleanPanel(process.env.PANEL_URL),AGENT_DOMAIN=String(process.env.AGENT_DOMAIN||'').trim(),VERSION=codeVersion(),PROXY_PORT=Number(process.env.AGENT_PROXY_PORT||8080);
 const AGENT_PROXY_MODE=String(process.env.AGENT_PROXY_MODE||'').trim().toLowerCase(),AGENT_PROXY_IP=String(process.env.AGENT_PROXY_IP||'').trim();
 const sha256=value=>b64u(crypto.createHash('sha256').update(value).digest());
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));

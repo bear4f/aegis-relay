@@ -222,15 +222,19 @@ function isRewritableType(contentType) {
 }
 // Decode a (small) rewritable body so its embedded URLs can be rewritten. We no longer force the
 // upstream to skip compression — that would bloat every response — so the few bodies we do rewrite
-// may arrive compressed and are decompressed here. Throws on an encoding we can't handle so the
-// caller can fall back to passing the original bytes through untouched.
+// may arrive compressed and are decompressed here. Async on purpose: a synchronous gunzip/brotli of a
+// large body would block the event loop and stall every concurrent video stream on the process.
+// rejects on an encoding we can't handle so the caller can pass the original bytes through untouched.
 function decodeBody(buf, encoding) {
   const e=String(encoding||'').toLowerCase();
-  if(!e||e==='identity')return buf;
-  if(e==='gzip'||e==='x-gzip')return zlib.gunzipSync(buf);
-  if(e==='deflate')return zlib.inflateSync(buf);
-  if(e==='br')return zlib.brotliDecompressSync(buf);
-  throw new Error('unsupported content-encoding');
+  return new Promise((resolve,reject)=>{
+    if(!e||e==='identity')return resolve(buf);
+    const cb=(err,out)=>err?reject(err):resolve(out);
+    if(e==='gzip'||e==='x-gzip')return zlib.gunzip(buf,cb);
+    if(e==='deflate')return zlib.inflate(buf,cb);
+    if(e==='br')return zlib.brotliDecompress(buf,cb);
+    reject(new Error('unsupported content-encoding'));
+  });
 }
 
 function externalRedirectPath(location, base) {
@@ -404,10 +408,11 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
             chunks.push(chunk); size+=chunk.length;
             if(size>STREAM_REWRITE_CAP){ upRes.pause(); upRes.off('data',onData); upRes.off('end',onEnd); delete out['content-length']; deliver(chainStream(chunks,upRes)); }
           };
-          const onEnd=()=>{
+          const onEnd=async()=>{
             let text;
-            try{ text=decodeBody(Buffer.concat(chunks,size),enc).toString('utf8'); }
-            catch{ deliver(Readable.from(chunks)); return; } // undecodable — pass the original bytes through untouched
+            try{ text=(await decodeBody(Buffer.concat(chunks,size),enc)).toString('utf8'); }
+            catch{ if(!res.headersSent&&!res.destroyed)deliver(Readable.from(chunks)); return; } // undecodable — pass the original bytes through untouched
+            if(res.destroyed||res.headersSent){ finishMetric(); return; } // client left during decode
             const outBuf=Buffer.from(rewriter(text),'utf8');
             delete out['content-encoding']; out['content-length']=String(outBuf.length);
             deliver(Readable.from([outBuf]));
