@@ -17,9 +17,9 @@
   --line-2:rgba(28,26,20,.16);
   /* text tiers (on light) */
   --text:#1e201d;
-  --text-2:#5b5f58;
-  --text-3:#9a9d93;
-  --muted:#83877d;
+  --text-2:#565a53;
+  --text-3:#83877d;
+  --muted:#6f7369;
   /* text tiers (on dark rail) */
   --rail-text:#e9ede6;
   --rail-text-2:rgba(233,237,230,.62);
@@ -399,7 +399,8 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .form-section{margin-top:16px;padding-top:20px;border-top:1px solid var(--line)}
 .form-section.first{margin-top:0;padding-top:0;border-top:0}
 .form-section h3,.form-section p{margin:0}
-.form-section p{color:var(--muted);font-size:11px;margin-top:2px}
+.form-section h3{color:var(--text);font-weight:700}
+.form-section p{color:var(--text-2);font-size:11.5px;line-height:1.6;margin-top:4px}
 .simple-form{margin-top:18px}
 .switch-row{display:flex;align-items:center;justify-content:space-between;margin:16px 0;color:var(--text-2)}
 /* iOS-style switch */
@@ -415,7 +416,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   color:var(--text-2);font-size:12px;font-weight:600;transition:.2s var(--ease)}
 .preset-chip:hover{color:var(--text);background:var(--surface-2)}
 .preset-chip.active{border-color:transparent;background:var(--accent-dim);color:var(--accent)}
-.preset-hint{color:var(--text-3);font-size:11px;margin:-6px 0 14px}
+.preset-hint{color:var(--text-2);font-size:11.5px;margin:-6px 0 14px}
 /* advanced settings disclosure */
 .advanced-settings{margin-top:22px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);overflow:hidden}
 .advanced-settings summary{padding:15px 18px;cursor:pointer;color:var(--text);font-weight:700;list-style:none;display:flex;align-items:center}
