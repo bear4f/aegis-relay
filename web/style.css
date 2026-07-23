@@ -282,8 +282,8 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 /* ============================================================ Node cards */
 .node-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
 .node-card{position:relative;padding:22px;background:var(--surface);border:1px solid var(--line);
-  border-radius:var(--r);box-shadow:var(--shadow-sm);transition:.3s var(--ease)}
-.node-card:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+  border-radius:var(--r-lg);box-shadow:var(--shadow-sm);transition:transform .3s var(--ease),box-shadow .3s var(--ease),border-color .3s var(--ease)}
+.node-card:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:var(--line-2)}
 .node-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .node-card h3{margin:0 0 5px;letter-spacing:-.01em}
 .node-path{color:var(--accent);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -608,7 +608,11 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 
 /* ============================================================ Agent card editor */
 .agent-grid{grid-template-columns:repeat(auto-fill,minmax(400px,1fr))}
-.agent-card:before{content:"";position:absolute;inset:0 0 auto 0;height:3px;border-radius:var(--r) var(--r) 0 0;background:var(--accent);opacity:.7}
+.agent-card{overflow:hidden}
+/* the top edge reflects live status — green online, amber lagging, grey offline */
+.agent-card:before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--accent);opacity:.9}
+.agent-card[data-status="stale"]:before{background:var(--amber)}
+.agent-card[data-status="offline"]:before,.agent-card[data-status="revoked"]:before{background:var(--text-3);opacity:.5}
 .agent-card .node-card-head h3:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
   margin-right:8px;background:var(--green);box-shadow:0 0 8px rgba(47,158,99,.5);vertical-align:middle}
 .agent-card[data-status="stale"] .node-card-head h3:before{background:var(--amber);box-shadow:0 0 8px rgba(191,125,38,.5)}
