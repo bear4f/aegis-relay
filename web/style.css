@@ -53,9 +53,9 @@
 :root[data-theme="dark"]{
   --bg:#0d100e;--bg-soft:#12160f;
   --rail:#090b09;--rail-soft:#10130f;
-  --surface:#191e18;--surface-2:#212820;--surface-3:#2c332a;--inset:#151a13;
-  --line:rgba(255,255,255,.10);--line-2:rgba(255,255,255,.19);
-  --text:#e9ede3;--text-2:#a7ad9d;--text-3:#71776a;--muted:#8b9182;
+  --surface:#1b201a;--surface-2:#232a21;--surface-3:#2e352b;--inset:#141911;
+  --line:rgba(255,255,255,.11);--line-2:rgba(255,255,255,.2);
+  --text:#eef2e9;--text-2:#bcc2b1;--text-3:#8d9281;--muted:#9ca291;
   --accent:#57c596;--accent-strong:#46b184;--accent-soft:rgba(87,197,150,.15);--accent-glow:rgba(87,197,150,.34);
   --blue:#5f9edb;--violet:#9d86e2;--amber:#d69a45;--green:#54cd8e;--red:#e26a71;
   --green-dim:rgba(84,205,142,.16);--amber-dim:rgba(214,154,69,.16);--blue-dim:rgba(95,158,219,.16);
@@ -148,8 +148,8 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .auth-form input,.form-grid input,.form-grid textarea,.form-grid select,
 .diagnostic-action select,.import-area{
   display:block;width:100%;margin-top:8px;padding:12px 14px;color:var(--text);
-  background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);
-  outline:none;transition:.2s var(--ease);box-shadow:0 1px 2px rgba(45,38,22,.04)}
+  background:var(--inset);border:1px solid var(--line-2);border-radius:var(--r-sm);
+  outline:none;transition:.2s var(--ease)}
 .auth-form input::placeholder,.form-grid input::placeholder,.form-grid textarea::placeholder{color:var(--text-3)}
 .auth-form input:focus,.form-grid input:focus,.form-grid textarea:focus,
 .form-grid select:focus,.diagnostic-action select:focus,.import-area:focus{
