@@ -297,6 +297,7 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .pill.info{color:var(--blue);background:var(--blue-dim);border-color:transparent}
 .pill.lock{color:var(--amber);background:var(--amber-dim);border-color:transparent}
 .pill.disguise{color:var(--violet);background:var(--violet-dim);border-color:transparent}
+.pill.split{color:var(--blue);background:var(--blue-dim);border-color:transparent}
 .pill.off{color:var(--text-3)}
 .node-meta{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:17px 0}
 .node-meta div{padding:11px;background:var(--inset);border-radius:var(--r-xs);border:1px solid var(--line)}

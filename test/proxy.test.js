@@ -112,33 +112,61 @@ test('domain upstreams work with Node all-address connection attempts',async()=>
 test('admin cookie and CSRF token are stripped before proxying',()=>{const headers={cookie:'emby_session=media; aegis_session=admin-secret; theme=dark','x-csrf-token':'csrf-secret'};assert.deepEqual(stripAdminCredentials(headers),{cookie:'emby_session=media; theme=dark'})});
 test('upstreams cannot overwrite the root-scoped admin cookie',()=>{const headers={'set-cookie':['emby_session=media; Path=/','aegis_session=attacker; Path=/']};assert.deepEqual(stripAdminSetCookies(headers),{'set-cookie':['emby_session=media; Path=/']})});
 
-test('emulation forces one consistent client while each real device keeps its own device id',async()=>{
+test('compatibility profile sets hint headers but never rewrites the authenticated identity or query',async()=>{
+  // The compat profile is only a hint for upstreams you own/are authorized to proxy. It must leave
+  // the MediaBrowser auth header, tokens, and query identity byte-for-byte intact — rewriting them
+  // desyncs the request from Emby's token/session binding and breaks playback on anti-proxy servers.
   const seen=[];const upstream=http.createServer((q,s)=>{seen.push({url:q.url,headers:q.headers});s.end('ok')}),up=await listen(upstream),key=deriveKey('e'.repeat(32));
-  const store={data:{routes:[{id:'emu',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,clientProfile:{enabled:true,userAgent:'SenPlayer/1.2.0',client:'SenPlayer',deviceName:'SenPlayer'}}]}};
+  const store={data:{routes:[{id:'emu',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,clientProfile:{enabled:true,userAgent:'Compat UA',client:'Compat Client',deviceName:'Compat Device'}}]}};
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
-  await request(port,'/emu/Videos/1/stream?X-Emby-Client=Popcorn&DeviceId=real-abc&api_key=keepme',{headers:{'x-emby-authorization':'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"','x-emby-client':'Popcorn','x-emby-device-id':'real-abc'}});
-  await request(port,'/emu/Videos/2/stream?DeviceId=other-xyz&api_key=keepme',{headers:{authorization:'MediaBrowser Client="Infuse", Device="iPad", DeviceId="other-xyz", Version="8.1", Token="tok2"','x-emby-device-id':'other-xyz'}});
-  const a=seen[0],b=seen[1];
-  // whatever the real player, the upstream sees the one emulated client
-  assert.equal(a.headers['user-agent'],'SenPlayer/1.2.0');
-  assert.equal(a.headers['x-emby-client'],'SenPlayer');
-  assert.equal(a.headers['x-emby-device-name'],'SenPlayer');
-  assert.equal(a.headers['x-emby-client-version'],'1.2.0');
-  // the real device id is preserved (not merged into one shared device)
-  assert.equal(a.headers['x-emby-device-id'],'real-abc');
-  assert.match(a.headers['x-emby-authorization'],/Client="SenPlayer"/);
-  assert.match(a.headers['x-emby-authorization'],/Device="SenPlayer"/);
-  assert.match(a.headers['x-emby-authorization'],/DeviceId="real-abc"/);
-  assert.match(a.headers['x-emby-authorization'],/Version="1.2.0"/);
-  assert.match(a.headers['x-emby-authorization'],/Token="secret-token"/);
-  assert.match(a.url,/X-Emby-Client=SenPlayer/);
+  await request(port,'/emu/Videos/1/stream?X-Emby-Client=Popcorn&DeviceId=real-abc&api_key=keepme',{headers:{'x-emby-authorization':'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"'}});
+  const a=seen[0];
+  // declared compat hint headers are applied
+  assert.equal(a.headers['user-agent'],'Compat UA');
+  assert.equal(a.headers['x-emby-client'],'Compat Client');
+  assert.equal(a.headers['x-emby-device-name'],'Compat Device');
+  // authenticated identity, token, and query are passed through unchanged
+  assert.equal(a.headers['x-emby-authorization'],'MediaBrowser Client="Popcorn", Device="iPhone14", DeviceId="real-abc", Version="9.9", Token="secret-token"');
+  assert.match(a.url,/X-Emby-Client=Popcorn/);
   assert.match(a.url,/DeviceId=real-abc/);
   assert.match(a.url,/api_key=keepme/);
-  // a different real device stays a DISTINCT device, still reported as the same client
-  assert.equal(b.headers['x-emby-device-id'],'other-xyz');
-  assert.notEqual(b.headers['x-emby-device-id'],a.headers['x-emby-device-id']);
-  assert.match(b.headers['authorization'],/Client="SenPlayer"/);
-  assert.match(b.headers['authorization'],/DeviceId="other-xyz"/);
-  assert.match(b.headers['authorization'],/Token="tok2"/);
+  await close(relay);await close(upstream);
+});
+
+test('front/back split: stream URLs in text bodies are rewritten and proxied back, unknown hosts blocked',async()=>{
+  let streamUrl=null,host='';
+  // One origin plays both roles: /Items returns an API body pointing at the (split) stream domain,
+  // everything else is the stream itself. The declared stream domain is this same host:port.
+  const upstream=http.createServer((q,s)=>{
+    if(q.url.startsWith('/Items')){s.setHeader('content-type','application/json');return s.end(JSON.stringify({MediaSources:[{DirectStreamUrl:`http://${host}/videos/9/stream.mp4?api_key=abc`}]}))}
+    streamUrl=q.url;s.setHeader('content-type','video/mp4');s.end('stream-bytes');
+  });
+  const up=await listen(upstream);host=`127.0.0.1:${up}`;const key=deriveKey('s'.repeat(32));
+  const store={data:{routes:[{id:'split',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://${host}`],allowPrivate:true,streamRewrite:{enabled:true,domains:[host]}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  // 1. the stream URL in the JSON body is rewritten to a path on this relay's own domain
+  const info=await request(port,'/emu/Items/1/PlaybackInfo',{headers:{host:'relay.test','x-forwarded-proto':'https'}});
+  const streamPath=`/emu/.aegis-vod/http/${host}/videos/9/stream.mp4?api_key=abc`;
+  assert.ok(info.body.toString().includes(`https://relay.test${streamPath}`),info.body.toString());
+  // 2. requesting the rewritten path proxies back to the real stream domain, query intact
+  const media=await request(port,streamPath,{headers:{host:'relay.test'}});
+  assert.equal(media.status,200);
+  assert.equal(media.body.toString(),'stream-bytes');
+  assert.equal(streamUrl,'/videos/9/stream.mp4?api_key=abc');
+  // 3. a host the operator never declared cannot be reached through the path (SSRF guard)
+  assert.equal((await request(port,'/emu/.aegis-vod/http/169.254.169.254/latest/meta-data',{headers:{host:'relay.test'}})).status,404);
+  // 4. only http/https transports are accepted
+  assert.equal((await request(port,`/emu/.aegis-vod/ftp/${host}/x`,{headers:{host:'relay.test'}})).status,404);
+  await close(relay);await close(upstream);
+});
+
+test('stream-domain rewrite is scheme-qualified and boundary-guarded against lookalike hosts',async()=>{
+  const upstream=http.createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({a:'https://vod.example.net/x',b:'https://vod.example.net.evil.com/y',c:'wss://vod.example.net/live'}))}),up=await listen(upstream),key=deriveKey('t'.repeat(32));
+  const store={data:{routes:[{id:'b',alias:'emu',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,streamRewrite:{enabled:true,domains:['vod.example.net']}}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const t=(await request(port,'/emu/System/Info',{headers:{host:'relay.test','x-forwarded-proto':'https'}})).body.toString();
+  assert.ok(t.includes('https://relay.test/emu/.aegis-vod/https/vod.example.net/x'),t);
+  assert.ok(t.includes('wss://relay.test/emu/.aegis-vod/https/vod.example.net/live'),t);
+  assert.ok(t.includes('https://vod.example.net.evil.com/y'),t); // lookalike suffix is left untouched
   await close(relay);await close(upstream);
 });

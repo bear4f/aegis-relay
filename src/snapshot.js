@@ -36,6 +36,11 @@ function clientProfile(value={}) {
   return result;
 }
 
+function streamRewrite(value={}) {
+  const domains=Array.isArray(value?.domains)?value.domains.map(d=>String(d||'').trim().toLowerCase()).filter(Boolean):[];
+  return {enabled:value?.enabled===true&&domains.length>0,domains};
+}
+
 function normalizeNode(route) {
   if(!route||typeof route!=='object')throw new Error('snapshot node must be an object');
   const id=String(route.id||'').trim(),alias=String(route.alias||'').trim();
@@ -54,7 +59,7 @@ function normalizeNode(route) {
     upstreams,
     playbackUpstreams:stringArray(route.playbackUpstreams||[],'playbackUpstreams'),
     allowPrivate:route.allowPrivate===true,tlsVerify:route.tlsVerify!==false,
-    showOnHome:route.showOnHome===true,clientProfile:clientProfile(route.clientProfile),
+    showOnHome:route.showOnHome===true,clientProfile:clientProfile(route.clientProfile),streamRewrite:streamRewrite(route.streamRewrite),
     speedLimitMbps:Number(route.speedLimitMbps||0),monthlyQuotaGB:Number(route.monthlyQuotaGB||0),access
   };
 }

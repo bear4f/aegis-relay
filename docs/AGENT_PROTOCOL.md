@@ -442,6 +442,7 @@ Agent
       "tlsVerify": true,
       "showOnHome": false,
       "clientProfile": {"enabled": false},
+      "streamRewrite": {"enabled": false, "domains": []},
       "speedLimitMbps": 0,
       "monthlyQuotaGB": 0,
       "access": {
