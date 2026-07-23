@@ -12,8 +12,14 @@
   <section id="auth" class="auth-shell">
     <div class="auth-art">
       <div class="brand brand-large"><span class="brand-mark">A</span><div><strong>AegisRelay</strong><small>PRIVACY-FIRST MEDIA GATEWAY</small></div></div>
-      <div class="auth-copy"><span class="eyebrow">安全入口</span><h1>你的媒体节点，<br>由你掌控边界。</h1><p>多线路容灾、流量治理、隐私中转和双因素认证，集中在一个干净的控制台。</p></div>
-      <div class="orb orb-one"></div><div class="orb orb-two"></div>
+      <div class="auth-copy"><span class="eyebrow">安全入口</span><h1>你的媒体节点，<br>由你掌控边界。</h1><p>多线路容灾、流量治理、隐私中转和双因素认证，集中在一个干净的控制台。</p>
+        <ul class="auth-features">
+          <li><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.8-3.2 7.8-8 9.8C7.2 19.8 4 16.8 4 12V7z"/><path d="M9 12l2 2 4-4"/></svg>Ed25519 签名 · nonce 防重放</li>
+          <li><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>AES-256-GCM 加密存储 · 2FA</li>
+          <li><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M12 7v4M6.7 16.8l3.8-4M17.3 16.8l-3.8-4"/></svg>多机数据面 · 每台独立域名</li>
+        </ul>
+      </div>
+      <div class="orb orb-one"></div><div class="orb orb-two"></div><div class="auth-grid-glow"></div>
     </div>
     <div class="auth-panel">
       <div id="setup" class="auth-form hidden"><span class="eyebrow">首次部署</span><h2>创建管理员</h2><p>先创建管理员并使用密码登录；两步验证可稍后在“个人设置”中开启。</p><label>管理员名称<input id="su-user" value="admin" autocomplete="username"></label><label>强密码<input id="su-pass" type="password" autocomplete="new-password" placeholder="至少 14 位"></label><label>Setup Token<input id="su-token" type="password" autocomplete="off" placeholder="安装程序生成的一次性令牌"></label><button id="setup-btn" class="btn primary">创建管理员</button></div>
