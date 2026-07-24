@@ -42,6 +42,24 @@ const tlsSessions=new Map();
 function tlsSessionKey(target){ return `${target.hostname}\0${target.port||'443'}`; }
 function rememberTlsSession(key,session){ if(!key||!session)return; tlsSessions.delete(key); tlsSessions.set(key,session); if(tlsSessions.size>TLS_SESSION_MAX)tlsSessions.delete(tlsSessions.keys().next().value); }
 export function clearTlsSessions(){ tlsSessions.clear(); }
+// Who is using a node — for the operator to spot a relay that has been redistributed. The real client
+// IP comes from the X-Real-IP the fronting Nginx sets (the relay strips it before going upstream, so
+// the upstream never sees it); the device fields come from the Emby headers / auth line / query.
+const clipText=(v,n=80)=>String(v||'').replace(/[\r\n\0]/g,'').trim().slice(0,n);
+const firstForwarded=v=>String(v||'').split(',')[0].trim();
+function hasViewerIdentity(req,incoming){ const h=req.headers,q=incoming.searchParams; return !!(h['x-emby-authorization']||h['x-emby-token']||h.authorization||q.get('api_key')||q.get('X-Emby-Token')||q.get('X-MediaBrowser-Token')); }
+function accessInfoFrom(req,incoming){
+  const h=req.headers;
+  const ip=firstForwarded(h['x-real-ip'])||firstForwarded(h['x-forwarded-for'])||String(req.socket?.remoteAddress||'').replace(/^::ffff:/,'');
+  if(!ip)return null;
+  const auth=String(h['x-emby-authorization']||h.authorization||''),q=incoming.searchParams;
+  const field=re=>{const m=auth.match(re);return m?m[1]:'';};
+  return { ip:clipText(ip,45),
+    deviceName:clipText(h['x-emby-device-name']||field(/Device="([^"]*)"/i)||q.get('X-Emby-Device-Name')||''),
+    client:clipText(h['x-emby-client']||field(/Client="([^"]*)"/i)||q.get('X-Emby-Client')||''),
+    deviceId:clipText(h['x-emby-device-id']||field(/DeviceId="([^"]*)"/i)||q.get('X-Emby-Device-Id')||q.get('DeviceId')||''),
+    ua:clipText(h['user-agent']||'',160) };
+}
 const CONNECT_TIMEOUT_MS=10_000;
 const RESPONSE_HEADER_TIMEOUT_MS=60_000;
 const FAILOVER_HEADER_TIMEOUT_MS=15_000;
@@ -360,6 +378,8 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
+    // Log the viewer (IP + device) once per identifiable request, before the client IP is stripped.
+    if (metrics && (playback || hasViewerIdentity(req,incoming))) { const info=accessInfoFrom(req,incoming); if(info) metrics.recordAccess(route,info); }
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
     // Mirror the proven Nginx gateway: advertise the public host/scheme so the upstream builds
     // correct redirects, but strip the client IP for privacy.

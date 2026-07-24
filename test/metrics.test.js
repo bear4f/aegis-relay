@@ -1,5 +1,20 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {Metrics,ThrottleTransform} from '../src/metrics.js';
+import {Metrics,ThrottleTransform,summarizeViewers} from '../src/metrics.js';
+
+test('recordAccess folds repeat requests per viewer and counts distinct IPs/devices',()=>{
+  const store={data:{},save(){}},metrics=new Metrics(store),route={id:'v1',alias:'v1'};
+  // same IP + device three times -> one entry, hits=3
+  for(let i=0;i<3;i++)metrics.recordAccess(route,{ip:'1.1.1.1',deviceId:'dev-a',deviceName:'iPhone',client:'Emby'});
+  // same IP, different device -> distinct device; different IP -> distinct IP
+  metrics.recordAccess(route,{ip:'1.1.1.1',deviceId:'dev-b',client:'Web'});
+  metrics.recordAccess(route,{ip:'2.2.2.2',deviceId:'dev-a'});
+  const node=metrics.snapshot([route]).nodes[0];
+  assert.equal(node.distinctIps,2);
+  assert.equal(node.distinctDevices,2);
+  const a=node.viewers.find(v=>v.ip==='1.1.1.1'&&v.deviceId==='dev-a');
+  assert.equal(a.hits,3);assert.equal(a.deviceName,'iPhone');
+  assert.equal(summarizeViewers({}).distinctIps,0);
+});
 
 test('metrics account for requests, playback and quota',()=>{const store={data:{},save(){}};const metrics=new Metrics(store),route={id:'n1',alias:'home',monthlyQuotaGB:0.0000001};const done=metrics.begin(route,{playback:true,bytesIn:12});done(200,120,false);const view=metrics.snapshot([route]),node=view.nodes[0];assert.equal(node.requests,1);assert.equal(node.playbackRequests,1);assert.equal(node.bytesIn,12);assert.equal(node.bytesOut,120);assert.equal(metrics.canServe(route),false)});
 test('zero-rate transform counts bytes without delaying',async()=>{const t=new ThrottleTransform(0),chunks=[];t.on('data',c=>chunks.push(c));t.end(Buffer.from('hello'));await new Promise(r=>t.on('end',r));assert.equal(t.bytes,5);assert.equal(Buffer.concat(chunks).toString(),'hello')});

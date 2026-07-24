@@ -1,6 +1,6 @@
 {
   "name": "aegis-relay",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Privacy-first multi-server Emby reverse proxy panel",
   "type": "module",

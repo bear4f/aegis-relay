@@ -49,6 +49,7 @@ ls0YYpE+ePrxn7w5QCBLTtjZ
 -----END PRIVATE KEY-----`;
 import { newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from '../src/route-auth.js';
 import { AtomicRouteSource } from '../src/local-agent.js';
+import { Metrics } from '../src/metrics.js';
 const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),close=s=>new Promise(r=>{s.closeAllConnections?.();s.close(r)});
 const listenAny=s=>new Promise(r=>s.listen(0,()=>r(s.address().port)));
 const request=(port,path,{method='GET',headers={},body}={})=>new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port,path,method,headers},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);if(body)req.write(body);req.end()});
@@ -69,6 +70,19 @@ test('an unlimited media response forwards its first small chunk before the orig
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   const result=await new Promise((resolve,reject)=>{const chunks=[];let sawFirst=false;const q=http.get({hostname:'127.0.0.1',port,path:'/first-byte/Videos/1/stream.mp4',headers:{range:'bytes=0-'}},r=>{r.on('data',chunk=>{chunks.push(chunk);if(!sawFirst){sawFirst=true;assert.equal(chunk.subarray(0,first.length).equals(first),true);setTimeout(release,10)}});r.on('end',()=>resolve(Buffer.concat(chunks)))});q.on('error',reject)});
   assert.equal(result.length,first.length+rest.length);assert.equal(result.subarray(0,first.length).equals(first),true);assert.equal(result.subarray(first.length).equals(rest),true);
+  await close(relay);await close(upstream);
+});
+test('playback requests record the viewer IP and device for the operator',async()=>{
+  const upstream=http.createServer((q,s)=>s.end('ok')),up=await listen(upstream),key=deriveKey('acc'.padEnd(32,'x'));
+  const store={data:{routes:[{id:'acc',alias:'acc',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const metrics=new Metrics({data:{},save(){}});
+  const relay=http.createServer(makeProxyHandler(store,key,metrics)),port=await listen(relay);
+  // two requests from the same viewer fold into one entry; the client IP comes from X-Real-IP
+  for(let i=0;i<2;i++)await request(port,'/acc/Videos/1/stream.mp4',{headers:{'x-real-ip':'203.0.113.9','x-emby-device-name':'Living Room TV','x-emby-client':'Emby for Android','x-emby-device-id':'dev-xyz','user-agent':'Emby/3'}});
+  const node=metrics.snapshot(store.data.routes).nodes[0];
+  assert.equal(node.distinctIps,1);
+  const v=node.viewers[0];
+  assert.equal(v.ip,'203.0.113.9');assert.equal(v.deviceName,'Living Room TV');assert.equal(v.client,'Emby for Android');assert.equal(v.deviceId,'dev-xyz');assert.equal(v.hits,2);
   await close(relay);await close(upstream);
 });
 test('fresh media sockets resume the cached TLS session so startup skips the full handshake',async()=>{

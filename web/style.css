@@ -299,6 +299,15 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .pill.disguise{color:var(--violet);background:var(--violet-dim);border-color:transparent}
 .pill.split{color:var(--blue);background:var(--blue-dim);border-color:transparent}
 .pill.off{color:var(--text-3)}
+.pill.danger{color:var(--red);background:var(--red-dim,rgba(208,71,79,.14));border-color:transparent}
+.access-grid{display:grid;gap:16px}
+.access-card.suspicious{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
+.access-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+.access-head h3{font-size:15px}
+.access-stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.access-card table{width:100%;border-collapse:collapse;font-size:12px}
+.access-card th{text-align:left;color:var(--text-3);font-size:9px;letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
+.access-card td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .node-meta{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:17px 0}
 .node-meta div{padding:11px;background:var(--inset);border-radius:var(--r-xs);border:1px solid var(--line)}
 .node-meta small,.node-meta strong{display:block}

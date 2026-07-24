@@ -6,6 +6,17 @@ const counter=value=>{
 };
 
 const cleanText=(value,max=80)=>String(value||'').replace(/[\r\n\0]/g,'').slice(0,max);
+// Cap on how many detailed viewer rows an agent ships per node each check-in. The distinct counts are
+// computed from the agent's full rolling set, so the badge stays accurate even past this cap.
+const VIEWER_REPORT_CAP=50;
+function cleanViewers(list){
+  const out=[];
+  for(const v of Array.isArray(list)?list.slice(0,VIEWER_REPORT_CAP):[]){
+    const ip=cleanText(v?.ip,45);if(!ip)continue;
+    out.push({ip,deviceName:cleanText(v.deviceName,80),client:cleanText(v.client,80),deviceId:cleanText(v.deviceId,80),ua:cleanText(v.ua,160),firstSeen:counter(v.firstSeen),lastSeen:counter(v.lastSeen),hits:counter(v.hits)});
+  }
+  return out;
+}
 
 export function sanitizeTelemetry(value) {
   if(!value||typeof value!=='object'||Array.isArray(value))return null;
@@ -16,7 +27,8 @@ export function sanitizeTelemetry(value) {
       id,alias:cleanText(item.alias,32),name:cleanText(item.name,80),
       requests:counter(item.requests),playbackRequests:counter(item.playbackRequests),errors:counter(item.errors),
       bytesIn:counter(item.bytesIn),bytesOut:counter(item.bytesOut),monthBytes:counter(item.monthBytes),
-      active:counter(item.active),month:/^\d{4}-\d{2}$/.test(String(item.month||''))?String(item.month):''
+      active:counter(item.active),month:/^\d{4}-\d{2}$/.test(String(item.month||''))?String(item.month):'',
+      distinctIps:counter(item.distinctIps),distinctDevices:counter(item.distinctDevices),viewers:cleanViewers(item.viewers)
     });
   }
   const daily={};
