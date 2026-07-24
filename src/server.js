@@ -11,7 +11,7 @@ import { Notifier } from './notifier.js';
 import { clientCredentials, savedCredentials } from './credentials.js';
 import { adminRelative, isRootAdminRequest, normalizeAdminPath } from './admin-path.js';
 import { customConnectionKey } from './connection-key.js';
-import { isRouteAuthKey, newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from './route-auth.js';
+import { isRouteAuthKey, newRouteAuthKey, ROUTE_AUTH_VERSION, routeChannels, routeTokenDigest } from './route-auth.js';
 import { LocalAgent } from './local-agent.js';
 import { ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgent, removeRouteDeployments, replaceAgentDeployments } from './agent-registry.js';
 import { AgentApi, enrollmentInstallCommand, issueEnrollment, normalizeCertificateEmail } from './agent-api.js';
@@ -92,7 +92,13 @@ function routeAuthFields(accessKey) {
   const routeAuthKey=newRouteAuthKey();
   return { authVersion:ROUTE_AUTH_VERSION, routeAuthKey, keyDigest:routeTokenDigest(accessKey,routeAuthKey), accessKey };
 }
-function publicRoute(r) { return { id:r.id, alias:r.alias, name:r.name, enabled:r.enabled, upstreams:routeUpstreams(r), allowPrivate:r.allowPrivate, tlsVerify:r.tlsVerify, accessMode:r.accessMode||'key', authMigrationRequired:r.authMigrationRequired===true, showOnHome:r.showOnHome===true, clientProfile:r.clientProfile||{enabled:false},streamRewrite:r.streamRewrite||{enabled:false,domains:[]},tags:r.tags||[],notes:r.notes||'',favorite:r.favorite===true,sortOrder:Number(r.sortOrder||0),speedLimitMbps:Number(r.speedLimitMbps||0),monthlyQuotaGB:Number(r.monthlyQuotaGB||0),reminderDays:Number(r.reminderDays||0),accessAlertThreshold:Number(r.accessAlertThreshold||0),reminderLastAt:r.reminderLastAt||null,createdAt:r.createdAt,updatedAt:r.updatedAt }; }
+// One extra distribution channel (a labeled per-user connection key) beyond the node's default key.
+function newChannel(label,accessKey){const key=connectionKey(accessKey),routeAuthKey=newRouteAuthKey();return{id:randomToken(8),label:String(label||'').slice(0,40),accessKey:key,routeAuthKey,keyDigest:routeTokenDigest(key,routeAuthKey),authVersion:ROUTE_AUTH_VERSION,createdAt:new Date().toISOString()};}
+// Channel list without secrets (for publicRoute / access mapping).
+function channelList(r){return routeChannels(r).map(ch=>({id:ch.id,label:ch.label||(ch.id==='default'?'默认':''),createdAt:ch.createdAt||r.createdAt||null,isDefault:ch.id==='default'}));}
+// Channel list WITH each channel's client URL (for the operator to copy and hand out).
+function channelCredentials(r){return routeChannels(r).map(ch=>({id:ch.id,label:ch.label||(ch.id==='default'?'默认':''),isDefault:ch.id==='default',clientPath:ch.accessKey?`/${r.alias}/${ch.accessKey}/`:`/${r.alias}/`}));}
+function publicRoute(r) { return { id:r.id, alias:r.alias, name:r.name, enabled:r.enabled, upstreams:routeUpstreams(r), allowPrivate:r.allowPrivate, tlsVerify:r.tlsVerify, accessMode:r.accessMode||'key', authMigrationRequired:r.authMigrationRequired===true, showOnHome:r.showOnHome===true, clientProfile:r.clientProfile||{enabled:false},streamRewrite:r.streamRewrite||{enabled:false,domains:[]},tags:r.tags||[],notes:r.notes||'',favorite:r.favorite===true,sortOrder:Number(r.sortOrder||0),speedLimitMbps:Number(r.speedLimitMbps||0),monthlyQuotaGB:Number(r.monthlyQuotaGB||0),reminderDays:Number(r.reminderDays||0),accessAlertThreshold:Number(r.accessAlertThreshold||0),channels:channelList(r),reminderLastAt:r.reminderLastAt||null,createdAt:r.createdAt,updatedAt:r.updatedAt }; }
 function localDomainStatus(){const status=readDomainStatus(cfg.dataFile);if(!status)return null;if(status.state==='active'&&status.currentDomain&&status.currentDomain!==configuredLocalDomain)return{...status,state:'applying',message:'Nginx 已切换，面板服务正在重新载入配置'};return status}
 // A switch that finished and already matches the live endpoint is not news: the "当前生效域名"
 // field and the sync pill already show it, so surfacing a permanent green "已生效" banner is just
@@ -114,38 +120,39 @@ function machineTelemetryList(){
 }
 // Distinct-viewer badge counts per node, merged across machines (max of each machine's own count — a
 // cheap upper bound good enough for the "被分发" flag; the full viewer union is built in /access).
-function accessSummaryById(machines){
-  const byId=new Map();
-  for(const m of machines)for(const n of (m.telemetry?.nodes||[])){const e=byId.get(n.id)||{distinctIps:0,distinctDevices:0};e.distinctIps=Math.max(e.distinctIps,Number(n.distinctIps||0));e.distinctDevices=Math.max(e.distinctDevices,Number(n.distinctDevices||0));byId.set(n.id,e);}
-  return byId;
+function nodeChannels(machines, route, includeViewers){
+  const threshold=Number(route?.accessAlertThreshold||0), byChannel=new Map();
+  for(const m of machines)for(const n of (m.telemetry?.nodes||[])){ if(n.id!==route.id)continue;
+    for(const v of (n.viewers||[])){ const cid=v.channelId||'default'; let cv=byChannel.get(cid); if(!cv){cv=new Map();byChannel.set(cid,cv);}
+      const k=`${v.ip} ${v.deviceId||v.deviceName||v.ua||''}`, cur=cv.get(k);
+      if(!cur)cv.set(k,{ip:v.ip,deviceName:v.deviceName||'',client:v.client||'',deviceId:v.deviceId||'',ua:v.ua||'',firstSeen:Number(v.firstSeen||0),lastSeen:Number(v.lastSeen||0),hits:Number(v.hits||0),machine:m.name});
+      else{cur.hits+=Number(v.hits||0);cur.firstSeen=Math.min(cur.firstSeen||Number(v.firstSeen||0),Number(v.firstSeen||0)||cur.firstSeen);if(Number(v.lastSeen||0)>cur.lastSeen)Object.assign(cur,{lastSeen:Number(v.lastSeen||0),deviceName:v.deviceName||cur.deviceName,client:v.client||cur.client,deviceId:v.deviceId||cur.deviceId,ua:v.ua||cur.ua,machine:m.name});}
+    }
+  }
+  const labels=new Map(channelList(route).map(c=>[c.id,c.label])), ids=new Set([...labels.keys(),...byChannel.keys()]);
+  const channels=[...ids].map(cid=>{
+    const vs=[...(byChannel.get(cid)||new Map()).values()].sort((a,b)=>b.lastSeen-a.lastSeen);
+    const distinctIps=new Set(vs.map(v=>v.ip)).size, distinctDevices=new Set(vs.map(v=>v.deviceId||v.deviceName||v.ua).filter(Boolean)).size;
+    const ch={id:cid,label:labels.get(cid)||(cid==='default'?'默认':'(已删除通道)'),isDefault:cid==='default',distinctIps,distinctDevices,suspicious:threshold>0&&distinctDevices>threshold};
+    if(includeViewers)ch.viewers=vs.slice(0,200);
+    return ch;
+  }).sort((a,b)=>(Number(b.suspicious)-Number(a.suspicious))||(b.distinctDevices-a.distinctDevices)||(a.isDefault?-1:1));
+  return {threshold,distinctIps:channels.reduce((s,c)=>s+c.distinctIps,0),distinctDevices:channels.reduce((s,c)=>s+c.distinctDevices,0),suspicious:channels.some(c=>c.suspicious),channels};
 }
 // Alert on distinct DEVICES, not IPs: mainland dynamic IPs (WiFi/5G/CGNAT) churn one legitimate
 // viewer across many IPs, but an Emby device id is stable per player, and a household has a bounded
 // device count — a redistributed relay is what shows a spike of distinct devices.
-function suspiciousNode(route,summary){const t=Number(route.accessAlertThreshold||0);return t>0&&Number(summary?.distinctDevices||0)>t;}
 function dashboardSnapshot(){
   const {localSnapshot,machines}=machineTelemetryList();
   const combined=aggregateTelemetry(machines.map(machine=>machine.telemetry));
-  const access=accessSummaryById(machines),routeById=new Map(store.data.routes.map(r=>[r.id,r]));
-  const nodes=localSnapshot.nodes.map(n=>{const s=access.get(n.id)||{distinctIps:0,distinctDevices:0},r=routeById.get(n.id);return{...n,distinctIps:s.distinctIps,distinctDevices:s.distinctDevices,accessAlertThreshold:Number(r?.accessAlertThreshold||0),suspicious:suspiciousNode(r||{},s)}});
+  const routeById=new Map(store.data.routes.map(r=>[r.id,r]));
+  const nodes=localSnapshot.nodes.map(n=>{const r=routeById.get(n.id),b=nodeChannels(machines,r||{id:n.id},false);return{...n,distinctIps:b.distinctIps,distinctDevices:b.distinctDevices,accessAlertThreshold:Number(r?.accessAlertThreshold||0),suspicious:b.suspicious}});
   return {...localSnapshot,nodes,totalRequests:combined.totalRequests,totalBytes:combined.totalBytes,monthBytes:combined.monthBytes,playbackRequests:combined.playbackRequests,errors:combined.errors,active:combined.active,daily:combined.daily,machines,onlineMachines:machines.filter(machine=>machine.status==='online'&&machine.proxyHealthy).length};
 }
 // Full per-node viewer roster (IP + device), merged and de-duplicated across every machine serving it.
 function accessSnapshot(){
-  const {machines}=machineTelemetryList(),byId=new Map();
-  for(const m of machines)for(const n of (m.telemetry?.nodes||[])){
-    let e=byId.get(n.id);if(!e){e={viewers:new Map(),mIps:0,mDevices:0};byId.set(n.id,e);}
-    e.mIps=Math.max(e.mIps,Number(n.distinctIps||0));e.mDevices=Math.max(e.mDevices,Number(n.distinctDevices||0));
-    for(const v of (n.viewers||[])){const k=`${v.ip} ${v.deviceId||v.deviceName||v.ua||''}`,cur=e.viewers.get(k);
-      if(!cur)e.viewers.set(k,{ip:v.ip,deviceName:v.deviceName||'',client:v.client||'',deviceId:v.deviceId||'',ua:v.ua||'',firstSeen:Number(v.firstSeen||0),lastSeen:Number(v.lastSeen||0),hits:Number(v.hits||0),machine:m.name});
-      else{cur.hits+=Number(v.hits||0);cur.firstSeen=Math.min(cur.firstSeen||Number(v.firstSeen||0),Number(v.firstSeen||0)||cur.firstSeen);if(Number(v.lastSeen||0)>cur.lastSeen){cur.lastSeen=Number(v.lastSeen||0);cur.deviceName=v.deviceName||cur.deviceName;cur.client=v.client||cur.client;cur.deviceId=v.deviceId||cur.deviceId;cur.ua=v.ua||cur.ua;cur.machine=m.name;}}
-    }
-  }
-  return store.data.routes.map(r=>{
-    const e=byId.get(r.id)||{viewers:new Map(),mIps:0,mDevices:0},viewers=[...e.viewers.values()].sort((a,b)=>b.lastSeen-a.lastSeen);
-    const distinctIps=Math.max(new Set(viewers.map(v=>v.ip)).size,e.mIps),distinctDevices=Math.max(new Set(viewers.map(v=>v.deviceId||v.deviceName||v.ua).filter(Boolean)).size,e.mDevices),threshold=Number(r.accessAlertThreshold||0);
-    return {id:r.id,alias:r.alias,name:r.name,threshold,distinctIps,distinctDevices,suspicious:threshold>0&&distinctDevices>threshold,viewers:viewers.slice(0,200)};
-  });
+  const {machines}=machineTelemetryList();
+  return store.data.routes.map(r=>{const b=nodeChannels(machines,r,true);return {id:r.id,alias:r.alias,name:r.name,threshold:b.threshold,distinctIps:b.distinctIps,distinctDevices:b.distinctDevices,suspicious:b.suspicious,status:b.suspicious?'疑似多人共享':'安全',channels:b.channels};});
 }
 
 async function api(req, res, rel, cookiePath = cfg.adminPath) {
@@ -262,6 +269,12 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
   }
   const credentials=rel.match(/^\/routes\/([^/]+)\/credentials$/);if(credentials&&req.method==='GET'){const r=store.data.routes.find(x=>x.id===credentials[1]);if(!r)return json(res,404,{error:'not found'});store.audit('route.credentials_viewed',ip(req),r.alias);return json(res,200,{...savedCredentials(r),publicBaseUrl:clientBaseUrl()});}
   const rot=rel.match(/^\/routes\/([^/]+)\/rotate-key$/);if(rot&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===rot[1]);if(!r)return json(res,404,{error:'not found'});if(r.accessMode==='alias_only')return json(res,409,{error:'this node does not use an access key'});const b=await body(req),accessKey=connectionKey(b.accessKey),routeAuthKey=r.authVersion===ROUTE_AUTH_VERSION&&isRouteAuthKey(r.routeAuthKey)?r.routeAuthKey:newRouteAuthKey();r.authVersion=ROUTE_AUTH_VERSION;r.routeAuthKey=routeAuthKey;r.keyDigest=routeTokenDigest(accessKey,routeAuthKey);r.accessKey=accessKey;delete r.authMigrationRequired;r.updatedAt=new Date().toISOString();store.audit('route.key_rotated',ip(req),r.alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,credentialsFor(r,accessKey));}
+  const chans=rel.match(/^\/routes\/([^/]+)\/channels$/);if(chans){const r=store.data.routes.find(x=>x.id===chans[1]);if(!r)return json(res,404,{error:'not found'});
+    if(req.method==='GET')return json(res,200,{channels:channelCredentials(r),publicBaseUrl:clientBaseUrl()});
+    if(req.method==='POST'){if(r.accessMode!=='key')return json(res,409,{error:'该节点未启用连接密码，无法添加分发通道；请先在编辑里开启连接密码'});const b=await body(req);r.channels=Array.isArray(r.channels)?r.channels:[];if(r.channels.length>=32)return json(res,409,{error:'一个节点最多 32 个分发通道'});const channel=newChannel(b.label,b.accessKey);r.channels.push(channel);r.updatedAt=new Date().toISOString();store.audit('route.channel_added',ip(req),`${r.alias}:${channel.label}`);(localAgent.reconcile(),agentApi.invalidate());return json(res,201,{channel:{id:channel.id,label:channel.label,clientPath:`/${r.alias}/${channel.accessKey}/`},publicBaseUrl:clientBaseUrl()});}}
+  const chOne=rel.match(/^\/routes\/([^/]+)\/channels\/([^/]+)$/);if(chOne){const r=store.data.routes.find(x=>x.id===chOne[1]);if(!r)return json(res,404,{error:'not found'});const cid=chOne[2];if(cid==='default')return json(res,409,{error:'默认通道不能在此删除/改名，请用列表中的“密码”按钮'});r.channels=Array.isArray(r.channels)?r.channels:[];const channel=r.channels.find(c=>c.id===cid);if(!channel)return json(res,404,{error:'通道不存在'});
+    if(req.method==='DELETE'){r.channels=r.channels.filter(c=>c.id!==cid);r.updatedAt=new Date().toISOString();store.audit('route.channel_removed',ip(req),`${r.alias}:${channel.label}`);(localAgent.reconcile(),agentApi.invalidate());return json(res,200,{ok:true});}
+    if(req.method==='PATCH'){const b=await body(req);channel.label=String(b.label||'').slice(0,40);r.updatedAt=new Date().toISOString();(localAgent.reconcile(),agentApi.invalidate());return json(res,200,{ok:true,label:channel.label});}}
   const reminder=rel.match(/^\/routes\/([^/]+)\/reminder-complete$/);if(reminder&&req.method==='POST'){const r=store.data.routes.find(x=>x.id===reminder[1]);if(!r)return json(res,404,{error:'not found'});r.reminderLastAt=new Date().toISOString();r.reminderNotifiedAt=null;store.audit('route.reminder_completed',ip(req),r.alias);return json(res,200,{ok:true,at:r.reminderLastAt});}
   const diag=rel.match(/^\/diagnostics\/([^/]+)$/);if(diag&&(req.method==='GET'||req.method==='POST')){const r=store.data.routes.find(x=>x.id===diag[1]);if(!r)return json(res,404,{error:'not found'});const result=await diagnoseRoute(r);store.audit('route.diagnosed',ip(req),r.alias);return json(res,200,result);}
   return json(res,404,{error:'not found'});

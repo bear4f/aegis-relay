@@ -300,7 +300,36 @@ svg{stroke-linecap:round;stroke-linejoin:round}
 .pill.split{color:var(--blue);background:var(--blue-dim);border-color:transparent}
 .pill.off{color:var(--text-3)}
 .pill.danger{color:var(--red);background:var(--red-dim,rgba(208,71,79,.14));border-color:transparent}
-.access-grid{display:grid;gap:16px}
+.access-grid{display:grid;gap:12px}
+.channels-list{display:grid;gap:8px;margin:10px 0}
+.channel-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:var(--inset);border:1px solid var(--line);border-radius:var(--r-xs)}
+.channel-info{min-width:0;overflow:hidden}
+.chan-url{font-size:11px;word-break:break-all}
+.channel-actions{display:flex;gap:6px;flex-shrink:0}
+.channel-add{display:flex;gap:8px;margin-top:8px}
+.channel-add input{flex:1}
+.access-node{padding:0;overflow:hidden}
+.access-node.suspicious{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
+.access-node-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px;cursor:pointer;list-style:none}
+.access-node-head::-webkit-details-marker{display:none}
+.access-node-head::before{content:'▸';color:var(--text-3);transition:transform .15s}
+.access-node[open]>.access-node-head::before{transform:rotate(90deg)}
+.access-node-name{font-weight:600;flex:1;min-width:120px}
+.node-status{font-weight:600;font-size:12px}
+.node-status.ok{color:var(--green)}
+.node-status.bad{color:var(--red)}
+.access-node-body{padding:0 16px 14px}
+.chan-detail{border:1px solid var(--line);border-radius:var(--r-xs);margin-top:8px;background:var(--inset)}
+.chan-detail.suspicious{border-color:var(--amber)}
+.chan-detail>summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;cursor:pointer;list-style:none}
+.chan-detail>summary::-webkit-details-marker{display:none}
+.chan-detail>summary::before{content:'▸';color:var(--text-3);transition:transform .15s}
+.chan-detail[open]>summary::before{transform:rotate(90deg)}
+.chan-name{font-weight:600;flex:1;min-width:80px}
+.chan-detail table{width:100%;border-collapse:collapse;font-size:12px}
+.chan-detail th{text-align:left;color:var(--text-3);font-size:9px;letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
+.chan-detail td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.chan-detail .muted,.access-node-body>.muted{padding:0 12px 10px}
 .access-card.suspicious{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset}
 .access-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
 .access-head h3{font-size:15px}

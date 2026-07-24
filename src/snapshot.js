@@ -51,6 +51,14 @@ function normalizeNode(route) {
     if(route.authMigrationRequired===true)throw new Error(`node ${alias} requires an access-key rotation before agent deployment`);
     if(route.authVersion!==ROUTE_AUTH_VERSION||!isRouteAuthKey(route.routeAuthKey)||typeof route.keyDigest!=='string'||!route.keyDigest)throw new Error(`node ${alias} has incomplete route authentication`);
     access={mode,algorithm:ROUTE_AUTH_VERSION,routeAuthKey:route.routeAuthKey,digest:route.keyDigest};
+    // Extra distribution channels (per-user keys) travel with their own digest so agents can verify
+    // and attribute each user's key.
+    const channels=[];
+    for(const ch of Array.isArray(route.channels)?route.channels:[]){
+      if(ch?.authVersion!==ROUTE_AUTH_VERSION||!isRouteAuthKey(ch.routeAuthKey)||typeof ch.keyDigest!=='string'||!ch.keyDigest)continue;
+      channels.push({id:String(ch.id||'').slice(0,32),routeAuthKey:ch.routeAuthKey,digest:ch.keyDigest});
+    }
+    if(channels.length)access.channels=channels;
   }
   const upstreams=stringArray(route.upstreams?.length?route.upstreams:(route.upstream?[route.upstream]:[]),'upstreams');
   if(!upstreams.length)throw new Error(`node ${alias} requires at least one upstream`);

@@ -6,7 +6,7 @@ import { pipeline, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import dnsPromises from 'node:dns/promises';
 import { isPrivateIP } from './security.js';
-import { isRouteAuthKey, verifyRouteToken } from './route-auth.js';
+import { isRouteAuthKey, matchRouteChannel, verifyRouteToken } from './route-auth.js';
 import { ThrottleTransform } from './metrics.js';
 import { guardedLookup } from './lookup.js';
 
@@ -127,10 +127,11 @@ function routeFor(req, routes, key) {
   const offset = parts[0] === 'r' ? 1 : 0;
   const route = routes.find(r => r.enabled && r.alias === parts[offset]);
   if (!route) return null;
-  if (route.accessMode === 'alias_only') return { route, rest:`/${parts.slice(offset + 1).join('/')}`, suppliedKey:'', prefix:accessPrefix(route) };
-  if (parts.length <= offset + 1 || !verifyRouteToken(route, parts[offset + 1], key)) return null;
-  const suppliedKey = parts[offset + 1];
-  return { route, rest:`/${parts.slice(offset + 2).join('/')}`, suppliedKey, prefix:accessPrefix(route, suppliedKey) };
+  if (route.accessMode === 'alias_only') return { route, rest:`/${parts.slice(offset + 1).join('/')}`, suppliedKey:'', prefix:accessPrefix(route), channelId:'default' };
+  if (parts.length <= offset + 1) return null;
+  const suppliedKey = parts[offset + 1], channel = matchRouteChannel(route, suppliedKey, key);
+  if (!channel) return null;
+  return { route, rest:`/${parts.slice(offset + 2).join('/')}`, suppliedKey, prefix:accessPrefix(route, suppliedKey), channelId:channel.id };
 }
 
 function stateKey(route, target) { return `${route.id || route.alias}\0${target}`; }
@@ -379,7 +380,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
     // Log the viewer (IP + device) once per identifiable request, before the client IP is stripped.
-    if (metrics && (playback || hasViewerIdentity(req,incoming))) { const info=accessInfoFrom(req,incoming); if(info) metrics.recordAccess(route,info); }
+    if (metrics && (playback || hasViewerIdentity(req,incoming))) { const info=accessInfoFrom(req,incoming); if(info){ info.channelId=found.channelId||'default'; metrics.recordAccess(route,info); } }
     if (!configured.length) { metricDone?.(502,0,true);res.writeHead(502,{'cache-control':'no-store'}); return res.end('no upstream available'); }
     // Mirror the proven Nginx gateway: advertise the public host/scheme so the upstream builds
     // correct redirects, but strip the client IP for privacy.
