@@ -95,15 +95,15 @@ test('a byte-addressable media response resumes after the origin drops mid-strea
   await close(relay);await close(upstream);
 });
 test('a stream that stalls more times than the resume budget still completes while it keeps advancing',async()=>{
-  const media=Buffer.alloc(384*1024);for(let i=0;i<media.length;i++)media[i]=i%251;
-  const cut=64*1024,ranges=[];
+  const media=Buffer.alloc(4*1024*1024);for(let i=0;i<media.length;i++)media[i]=i%251;
+  const cut=640*1024,ranges=[]; // each drop advances >512 KiB, so the budget refunds and >3 drops still finish
   const upstream=http.createServer((q,s)=>{
     ranges.push(q.headers.range||'');
     const match=/^bytes=(\d+)-(\d*)$/.exec(String(q.headers.range||'')),start=match?Number(match[1]):0,end=match&&match[2]?Number(match[2]):media.length-1;
     s.writeHead(206,{'content-type':'video/mp4','accept-ranges':'bytes','content-length':end-start+1,'content-range':`bytes ${start}-${end}/${media.length}`,etag:'"stable-media"'});
-    // Drop the socket after a partial chunk on every request but the last. Each drop still advances
-    // the stream, so more drops than MEDIA_RESUME_ATTEMPTS occur — the budget must refund on progress
-    // or a long movie with scattered hiccups dies early ("正常播放着就会卡断断流").
+    // Drop the socket after a >512 KiB chunk on every request but the last. Real forward progress
+    // refunds the retry budget, so many more drops than MEDIA_RESUME_ATTEMPTS still finish the movie
+    // ("正常播放着就会卡断断流" must not kill a long film that keeps advancing).
     if(start+cut<=end){s.write(media.subarray(start,start+cut),()=>setTimeout(()=>s.socket.destroy(),5));}
     else s.end(media.subarray(start,end+1));
   }),up=await listen(upstream),key=deriveKey('stall'.padEnd(32,'x'));
@@ -112,6 +112,53 @@ test('a stream that stalls more times than the resume budget still completes whi
   const response=await request(port,'/stall/Videos/1/stream.mp4',{headers:{range:`bytes=0-${media.length-1}`}});
   assert.equal(response.status,206);assert.equal(response.body.equals(media),true);
   assert.ok(ranges.length>4,`expected more resumes than the budget, saw ${ranges.length}`);
+  await close(relay);await close(upstream);
+});
+test('an origin that only trickles a few bytes per socket is bounded, not resumed forever',{timeout:15000},async()=>{
+  const media=Buffer.alloc(4*1024*1024);let conns=0;
+  const upstream=http.createServer((q,s)=>{
+    conns++;
+    const match=/^bytes=(\d+)-(\d*)$/.exec(String(q.headers.range||'')),start=match?Number(match[1]):0,end=match&&match[2]?Number(match[2]):media.length-1;
+    s.writeHead(206,{'content-type':'video/mp4','accept-ranges':'bytes','content-length':end-start+1,'content-range':`bytes ${start}-${end}/${media.length}`,etag:'"stable-media"'});
+    // 4 KiB (far below the 512 KiB refund floor) then drop, forever. The budget must NOT refund, so the
+    // resume loop stops after the source + MEDIA_RESUME_ATTEMPTS rather than reopening sockets endlessly.
+    s.write(media.subarray(start,start+4096),()=>setTimeout(()=>s.socket.destroy(),5));
+  }),up=await listen(upstream),key=deriveKey('trickle'.padEnd(32,'x'));
+  const store={data:{routes:[{id:'trickle',alias:'trickle',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const settled=await new Promise(resolve=>{
+    const chunks=[];const done=extra=>resolve({len:Buffer.concat(chunks).length,...extra});
+    const q=http.get({hostname:'127.0.0.1',port,path:'/trickle/Videos/1/stream.mp4',headers:{range:`bytes=0-${media.length-1}`}},r=>{
+      r.on('data',c=>chunks.push(c));r.on('end',()=>done());r.on('aborted',()=>done({aborted:true}));r.on('close',()=>done({closed:true}));
+    });
+    q.on('error',()=>done({error:true}));
+  });
+  assert.ok(conns<=1+3,`resume loop must be bounded, saw ${conns} upstream connections`);
+  assert.ok(settled.len<media.length,'a pathological trickle must never be reported as a complete stream');
+  await close(relay);await close(upstream);
+});
+test('a reused pooled socket that stalls during startup is evicted on the short leash and resumes clean',{timeout:20000},async()=>{
+  const media=Buffer.alloc(1024*1024);for(let i=0;i<media.length;i++)media[i]=i%251;let n=0;
+  const upstream=http.createServer((q,s)=>{
+    n++;const which=n;
+    const match=/^bytes=(\d+)-(\d*)$/.exec(String(q.headers.range||'')),start=match?Number(match[1]):0,end=match&&match[2]?Number(match[2]):media.length-1;
+    const head={'content-type':'video/mp4','accept-ranges':'bytes','content-length':end-start+1,'content-range':`bytes ${start}-${end}/${media.length}`,etag:'"m"'};
+    if(which===2){s.writeHead(206,head);s.write(media.subarray(start,start+8192));/* dribble then hang: no end, no close */}
+    else{s.writeHead(206,head);s.end(media.subarray(start,end+1));}
+  }),up=await listen(upstream),key=deriveKey('reuse'.padEnd(32,'x'));
+  const store={data:{routes:[{id:'reuse',alias:'reuse',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  // 1) warm-up completes and returns its upstream socket to the media pool
+  const warm=await request(port,'/reuse/Videos/1/stream.mp4',{headers:{range:'bytes=0-131071'}});
+  assert.equal(warm.body.length,131072);
+  // 2) the next media request reuses that warm socket; it stalls after 8 KiB inside the startup window
+  const started=Date.now();
+  const response=await request(port,'/reuse/Videos/2/stream.mp4',{headers:{range:`bytes=0-${media.length-1}`}});
+  const elapsed=Date.now()-started;
+  assert.equal(response.status,206);assert.equal(response.body.equals(media),true);
+  assert.ok(n>=3,'the stalled reused socket must be re-fetched on a fresh clean socket');
+  // evicted on the ~8s probation leash, not the 15s normal stall — this is the startup fast path
+  assert.ok(elapsed<13000,`reused startup stall should evict on the short leash, took ${elapsed}ms`);
   await close(relay);await close(upstream);
 });
 test('playback requests record the viewer IP and device for the operator',async()=>{
