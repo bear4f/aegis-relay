@@ -32,6 +32,8 @@ server {
         proxy_set_header Connection \$aegis_agent_connection_upgrade;
         proxy_request_buffering off;
         proxy_buffering off;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
         proxy_max_temp_file_size 0;
         # With buffering disabled this is the maximum read size per event. The platform default is
         # only one memory page (4K/8K), which creates needless syscall churn on fast media streams.
