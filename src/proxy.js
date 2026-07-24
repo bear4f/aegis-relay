@@ -73,10 +73,26 @@ const PLAYBACK_HEADER_TIMEOUT_MS=45_000;
 // gap or it churns needless reconnects mid-play.
 const MEDIA_STALL_TIMEOUT_MS=15_000;
 const MEDIA_RESUME_HEADER_TIMEOUT_MS=8_000;
-// Consecutive resume attempts allowed *without forward progress*. The budget is refunded whenever the
-// stream advances (see deliverResumable), so a long movie tolerates unlimited isolated hiccups and
-// only a genuinely dead origin exhausts it.
+// A *reused* pooled media socket is on probation: if a warm connection stalls before headers, or
+// dribbles only a few KiB before the stream has ramped up, that is the "delivers a handful of KiB then
+// hangs" frontend/CDN pathology — not a slow transcode (which is slow on a fresh socket too). Give it
+// a short leash and reconnect clean once. Fresh sockets keep the full patient windows below, so slow
+// transcode starts and paused streams are never clipped.
+const MEDIA_REUSED_PROBATION_MS=8_000;
+// The first slice of a body is the ramp-up window where "only a few dozen KiB then it won't speed up"
+// shows itself; past it a reused socket has proven healthy and reverts to the normal stall timeout.
+const MEDIA_STARTUP_BYTES=512*1024;
+// Consecutive resume attempts allowed *without meaningful forward progress*. The budget is refunded
+// only after the stream advances at least MEDIA_RESUME_PROGRESS_BYTES (see deliverResumable), so a long
+// movie tolerates unlimited real hiccups while an origin that trickles a few bytes per socket cannot
+// spin the resume loop forever.
 const MEDIA_RESUME_ATTEMPTS=3;
+const MEDIA_RESUME_PROGRESS_BYTES=512*1024;
+// Absolute safety rails independent of progress, all scoped to a single client playback request: bound
+// the resume frequency and the lifetime total so even an origin advancing >512 KiB each time cannot
+// reopen sockets without limit.
+const MEDIA_RESUME_PER_MINUTE=8;
+const MEDIA_RESUME_TOTAL_CAP=48;
 
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
 const safeMethod = method => method === 'GET' || method === 'HEAD';
@@ -160,10 +176,13 @@ function compatibleResume(status,headers,plan,next) {
   return true;
 }
 
-function waitForDrain(res,source) {
+// stall is the idle-watchdog duration for this leg; a function so the caller can shorten it during the
+// reused-socket startup window and widen it once the stream has proven healthy.
+function waitForDrain(res,source,stall) {
   return new Promise((resolve,reject)=>{
+    const restore=(typeof stall==='function'?stall():stall)??MEDIA_STALL_TIMEOUT_MS;
     const cleanup=()=>{res.off('drain',drain);res.off('close',closed);res.off('error',failed)};
-    const drain=()=>{cleanup();source?.socket?.setTimeout?.(MEDIA_STALL_TIMEOUT_MS);resolve()};
+    const drain=()=>{cleanup();source?.socket?.setTimeout?.(restore);resolve()};
     const closed=()=>{cleanup();reject(Object.assign(new Error('client closed'),{code:'ECLIENTGONE'}))};
     const failed=error=>{cleanup();reject(error)};
     // A paused/slow client is legitimate backpressure, not an upstream stall. Suspend the source
@@ -173,12 +192,17 @@ function waitForDrain(res,source) {
   });
 }
 
-async function pumpMedia(source,res,onBytes) {
+async function pumpMedia(source,res,onBytes,stall) {
+  let armed;
+  // Re-arm only when the phase value actually changes (setTimeout on every chunk would be wasteful).
+  const arm=()=>{ const v=typeof stall==='function'?stall():stall; if(v!==undefined&&v!==armed){armed=v;source?.socket?.setTimeout?.(v);} };
+  arm();
   for await (const chunk of source) {
     if(res.destroyed)throw Object.assign(new Error('client closed'),{code:'ECLIENTGONE'});
     if(!chunk.length)continue;
-    if(!res.write(chunk))await waitForDrain(res,source);
+    if(!res.write(chunk))await waitForDrain(res,source,stall);
     onBytes(chunk.length);
+    arm();
   }
 }
 
@@ -570,25 +594,34 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         const deliverResumable=(source,plan)=>{
           res.writeHead(status,out);res.flushHeaders?.();
           // Only watchdog a byte-addressable body. During downstream backpressure pumpMedia disables
-          // this timer, so a paused/slow viewer is not mistaken for a dead origin.
-          up.setTimeout(MEDIA_STALL_TIMEOUT_MS);
+          // this timer, so a paused/slow viewer is not mistaken for a dead origin. The original leg may
+          // be a warm pooled socket: give it the short probation leash until the stream ramps past the
+          // startup window, so "a few dozen KiB then it hangs" is evicted fast and re-fetched clean.
+          // openResume always dials a fresh clean socket, so resume legs keep the full stall timeout.
+          const sourceReused=up.reusedSocket===true;
+          const sourceStall=()=>(sourceReused&&streamed<MEDIA_STARTUP_BYTES)?MEDIA_REUSED_PROBATION_MS:MEDIA_STALL_TIMEOUT_MS;
+          const onBytes=bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)};
           const run=async()=>{
-            let current=source,retries=0,lastError=null,marker=streamed;
+            let current=source,isSource=true,retries=0,lastError=null,marker=streamed,totalResumes=0;
+            const resumeTimes=[];
             while(!clientGone&&!res.destroyed&&streamed<plan.length){
               if(current){
-                try{await pumpMedia(current,res,bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)});lastError=null;}
+                try{await pumpMedia(current,res,onBytes,isSource?sourceStall:MEDIA_STALL_TIMEOUT_MS);lastError=null;}
                 catch(error){lastError=error;}
-                current=null;
+                current=null;isSource=false;
               }
-              if(streamed===plan.length)break;
-              if(streamed>plan.length)break;
-              // Any forward progress means the origin is alive, just intermittent (a slow transcode,
-              // a CDN edge hiccup). Refund the retry budget so a two-hour movie with a dozen scattered
-              // stalls never runs out and drops the stream — only stalls with *no* progress between
-              // them count, which is the signature of an origin that has actually died.
-              if(streamed>marker){retries=0;marker=streamed;}
-              if(retries>=MEDIA_RESUME_ATTEMPTS)break;
-              const next=plan.start+streamed;retries++;
+              if(streamed>=plan.length)break;
+              // Refund the no-progress budget only after real progress (>=512 KiB), so an origin
+              // dribbling a few bytes per socket cannot keep buying it back; a long movie with scattered
+              // real stalls still never runs out and drops the stream.
+              if(streamed-marker>=MEDIA_RESUME_PROGRESS_BYTES){retries=0;marker=streamed;}
+              const nowMs=Date.now();
+              while(resumeTimes.length&&nowMs-resumeTimes[0]>=60_000)resumeTimes.shift();
+              // Any hard rail hit means the origin is pathological — break to the terminal branch, which
+              // destroys the response so the player sees a real disconnect and reconnects, never a fake
+              // completed end.
+              if(retries>=MEDIA_RESUME_ATTEMPTS||totalResumes>=MEDIA_RESUME_TOTAL_CAP||resumeTimes.length>=MEDIA_RESUME_PER_MINUTE)break;
+              const next=plan.start+streamed;retries++;totalResumes++;resumeTimes.push(nowMs);
               try{current=await openResume(plan,next);markSuccess(route,targetValue);}
               catch(error){lastError=error;}
             }
@@ -619,14 +652,25 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         }
       });
       activeUp=up;
-      const timeoutError=message=>Object.assign(new Error(message),{code:'ETIMEDOUT'});
+      const timeoutError=(message,extra)=>Object.assign(new Error(message),{code:'ETIMEDOUT'},extra);
       const connectTimer=setTimeout(()=>up.destroy(timeoutError('connect timeout')),CONNECT_TIMEOUT_MS);
-      const responseTimeout=playback?PLAYBACK_HEADER_TIMEOUT_MS:(configured.length>1?FAILOVER_HEADER_TIMEOUT_MS:RESPONSE_HEADER_TIMEOUT_MS);
-      const headerTimer=setTimeout(()=>up.destroy(timeoutError('response headers timeout')),responseTimeout);
-      connectTimer.unref?.();headerTimer.unref?.();
+      connectTimer.unref?.();
+      // The header wait is armed once the socket is assigned, because only then is up.reusedSocket
+      // known. A reused pooled media socket (client sent a Range) is on probation: no headers within
+      // the short leash means a poisoned pooled connection, re-fetched clean once. A fresh socket keeps
+      // the full patient window so a slow transcode start is never clipped.
+      const clientRange=!!req.headers.range;
+      let headerTimer=null;
+      const armHeaderTimer=()=>{
+        const reusedProbation=playback&&clientRange&&up.reusedSocket===true;
+        const ms=reusedProbation?MEDIA_REUSED_PROBATION_MS:(playback?PLAYBACK_HEADER_TIMEOUT_MS:(configured.length>1?FAILOVER_HEADER_TIMEOUT_MS:RESPONSE_HEADER_TIMEOUT_MS));
+        headerTimer=setTimeout(()=>up.destroy(timeoutError('response headers timeout',reusedProbation?{reusedProbation:true}:null)),ms);
+        headerTimer.unref?.();
+      };
       up.on('response',()=>{clearTimeout(connectTimer);clearTimeout(headerTimer)});
       up.on('socket',s=>{
         s.setNoDelay(true);s.setKeepAlive(true,15_000);
+        armHeaderTimer();
         if(!s.connecting)return clearTimeout(connectTimer);
         // Capture TLS session tickets from every new connection (API and media) so later unpooled
         // playback sockets to the same origin can resume instead of doing a full handshake.
@@ -641,9 +685,14 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         // A client that walked away is not an upstream fault; counting it opened circuits on
         // perfectly healthy nodes and produced sporadic 502s mid-session.
         if (clientGone) { if(!finished){finished=true;metricDone?.(499,0,false);} return; }
-        // A pooled connection the origin had already closed dies on reuse. Retry the same upstream
-        // once on a brand-new socket before treating it as a real failure.
-        const staleSocket=usesPool&&!finished&&canRetry&&!res.headersSent;
+        // Precisely the two ways a *reused* pooled socket fails before headers: the origin had already
+        // half-closed it (reset/broken pipe on reuse), or it stayed silent past the short probation
+        // leash. Either is a poisoned pooled connection — re-fetch once on a clean same-line socket.
+        // Everything else (a fresh socket's error, or a plain timeout on a socket that was never
+        // reused) is a slow or dead line, not a stale connection: do not burn a second window retrying
+        // the exact same thing. `usesPool` alone is not proof of reuse — a pool's first socket is new.
+        const resettable=err.code==='ECONNRESET'||err.code==='EPIPE';
+        const staleSocket=(( up.reusedSocket===true&&resettable )||err.reusedProbation===true)&&!freshSocket&&!finished&&canRetry&&!res.headersSent;
         if (staleSocket) return attempt(targetValue,index,true);
         const reason=safeUpstreamError(err);markFailure(route,targetValue,reason);
         if (canRetry && index+1<configured.length) return attempt(configured[index+1],index+1);
