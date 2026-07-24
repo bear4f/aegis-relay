@@ -24,13 +24,19 @@ const runtime = new Map();
 // not a per-connection reservation, and stays deliberately bounded for small VPSes.
 export const RELAY_HIGH_WATER_MARK=256*1024;
 export const RELAY_SERVER_OPTIONS=Object.freeze({highWaterMark:RELAY_HIGH_WATER_MARK,noDelay:true,keepAlive:true,keepAliveInitialDelay:15_000});
-// Reuse warm connections for short API/control traffic only. Media bodies, HLS segments and Range
-// seeks always start on a clean socket: a number of Emby frontends/CDNs accept API keep-alive but
-// then deliver only a few KiB when that socket is reused for a long response. Keeping media one-shot
-// also prevents a seek from inheriting a half-closed socket from the previous play position.
+// Two warm pools, so playback and control never poison each other's sockets. API/control traffic is
+// short and bursty; media bodies, HLS segments and Range seeks are long. Fresh sockets are murder on
+// startup and seek latency because every one repays TCP slow-start from a tiny congestion window
+// ("shows a few dozen KiB and can't ramp up"), so media keeps its own keep-alive pool to stay warm.
+// The invisible byte-resume net below opens a one-shot socket the moment a reused connection stalls,
+// so the specific frontends/CDNs that deliver only a few KiB on a re-used socket still recover cleanly
+// — pooling gives the fast warm-window path without ever trapping playback on a misbehaving origin.
 const API_AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
+const MEDIA_AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:30_000, maxSockets:256, maxFreeSockets:48, maxTotalSockets:512, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
 const httpAgent = new http.Agent(API_AGENT_OPTIONS);
 const httpsAgent = new https.Agent(API_AGENT_OPTIONS);
+const httpMediaAgent = new http.Agent(MEDIA_AGENT_OPTIONS);
+const httpsMediaAgent = new https.Agent(MEDIA_AGENT_OPTIONS);
 // Clean media sockets still resume the cached TLS session, avoiding a full handshake without
 // reintroducing unsafe HTTP connection reuse. API traffic and every completed HTTPS media request
 // feed this cache.
@@ -62,10 +68,15 @@ const RESPONSE_HEADER_TIMEOUT_MS=60_000;
 const FAILOVER_HEADER_TIMEOUT_MS=15_000;
 const PLAYBACK_HEADER_TIMEOUT_MS=45_000;
 // Byte-addressable media can be resumed safely. Do not leave the player frozen for the previous
-// 30-second window after an origin has stopped producing bytes.
-const MEDIA_STALL_TIMEOUT_MS=8_000;
+// 30-second window after an origin has stopped producing bytes — but on-the-fly transcode legitimately
+// pauses for several seconds while it renders ahead, so the watchdog must be slower than a transcode
+// gap or it churns needless reconnects mid-play.
+const MEDIA_STALL_TIMEOUT_MS=15_000;
 const MEDIA_RESUME_HEADER_TIMEOUT_MS=8_000;
-const MEDIA_RESUME_ATTEMPTS=2;
+// Consecutive resume attempts allowed *without forward progress*. The budget is refunded whenever the
+// stream advances (see deliverResumable), so a long movie tolerates unlimited isolated hiccups and
+// only a genuinely dead origin exhausts it.
+const MEDIA_RESUME_ATTEMPTS=3;
 
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
 const safeMethod = method => method === 'GET' || method === 'HEAD';
@@ -468,14 +479,17 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
       const target=directTarget||joinTarget(targetValue,found.rest,relaySearch), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
-      const secure=target.protocol==='https:',usesPool=!playback&&!freshSocket;
-      // PlaybackInfo may reuse the short API pool, but every actual media/seek request is one-shot.
-      // This compatibility-first split matches the fast v0.10.0 data path on mixed Emby/CDN nodes.
+      const secure=target.protocol==='https:';
+      // A failover/stale-socket retry (freshSocket) forces a clean one-shot socket; otherwise media
+      // rides its own warm pool and control traffic rides the API pool. Keeping the two pools apart
+      // means a long media body can never inherit — or hand off — a poisoned API socket.
+      const pool=freshSocket?null:(playback?(secure?httpsMediaAgent:httpMediaAgent):(secure?httpsAgent:httpAgent));
+      const usesPool=!!pool;
       requestHeaders.connection=usesPool?'keep-alive':'close';
       const tlsKey=secure?tlsSessionKey(target):'';
-      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:usesPool?(secure?httpsAgent:httpAgent):false};
-      // Pooled API agents handle TLS resumption themselves. One-shot media and recovery sockets use
-      // the shared session cache, retaining the latency win while avoiding HTTP keep-alive reuse.
+      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:pool||false};
+      // Pooled agents handle TLS resumption themselves. The one-shot recovery/failover sockets fall
+      // back to the shared session cache so even a fresh connection skips the full handshake.
       if(secure&&!usesPool){ const sess=tlsSessions.get(tlsKey); if(sess)options.session=sess; }
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
@@ -559,7 +573,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
           // this timer, so a paused/slow viewer is not mistaken for a dead origin.
           up.setTimeout(MEDIA_STALL_TIMEOUT_MS);
           const run=async()=>{
-            let current=source,retries=0,lastError=null;
+            let current=source,retries=0,lastError=null,marker=streamed;
             while(!clientGone&&!res.destroyed&&streamed<plan.length){
               if(current){
                 try{await pumpMedia(current,res,bytes=>{streamed+=bytes;metricDone?.addBytes?.(bytes)});lastError=null;}
@@ -567,7 +581,13 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
                 current=null;
               }
               if(streamed===plan.length)break;
-              if(streamed>plan.length||retries>=MEDIA_RESUME_ATTEMPTS)break;
+              if(streamed>plan.length)break;
+              // Any forward progress means the origin is alive, just intermittent (a slow transcode,
+              // a CDN edge hiccup). Refund the retry budget so a two-hour movie with a dozen scattered
+              // stalls never runs out and drops the stream — only stalls with *no* progress between
+              // them count, which is the signature of an origin that has actually died.
+              if(streamed>marker){retries=0;marker=streamed;}
+              if(retries>=MEDIA_RESUME_ATTEMPTS)break;
               const next=plan.start+streamed;retries++;
               try{current=await openResume(plan,next);markSuccess(route,targetValue);}
               catch(error){lastError=error;}
