@@ -24,18 +24,16 @@ const runtime = new Map();
 // not a per-connection reservation, and stays deliberately bounded for small VPSes.
 export const RELAY_HIGH_WATER_MARK=256*1024;
 export const RELAY_SERVER_OPTIONS=Object.freeze({highWaterMark:RELAY_HIGH_WATER_MARK,noDelay:true,keepAlive:true,keepAliveInitialDelay:15_000});
-// API and media traffic have separate keep-alive pools. This preserves the isolation added in
-// v0.8.8 (a stale API socket can never become a long video response) without throwing away the TCP
-// congestion window after every HLS segment, Range seek or direct-play request. PlaybackInfo uses
-// the media pool too, so the normal Emby startup sequence warms the exact pool used by the stream.
+// Reuse warm connections for short API/control traffic only. Media bodies, HLS segments and Range
+// seeks always start on a clean socket: a number of Emby frontends/CDNs accept API keep-alive but
+// then deliver only a few KiB when that socket is reused for a long response. Keeping media one-shot
+// also prevents a seek from inheriting a half-closed socket from the previous play position.
 const API_AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
-const MEDIA_AGENT_OPTIONS = { ...API_AGENT_OPTIONS, keepAliveMsecs:30_000, maxFreeSockets:128 };
 const httpAgent = new http.Agent(API_AGENT_OPTIONS);
 const httpsAgent = new https.Agent(API_AGENT_OPTIONS);
-const mediaHttpAgent = new http.Agent(MEDIA_AGENT_OPTIONS);
-const mediaHttpsAgent = new https.Agent(MEDIA_AGENT_OPTIONS);
-// A recovery attempt deliberately bypasses both pools. Cache TLS sessions so that clean fallback
-// sockets still avoid a full handshake after an origin closes a pooled connection.
+// Clean media sockets still resume the cached TLS session, avoiding a full handshake without
+// reintroducing unsafe HTTP connection reuse. API traffic and every completed HTTPS media request
+// feed this cache.
 const TLS_SESSION_MAX=1024;
 const tlsSessions=new Map();
 function tlsSessionKey(target){ return `${target.hostname}\0${target.port||'443'}`; }
@@ -63,7 +61,10 @@ const CONNECT_TIMEOUT_MS=10_000;
 const RESPONSE_HEADER_TIMEOUT_MS=60_000;
 const FAILOVER_HEADER_TIMEOUT_MS=15_000;
 const PLAYBACK_HEADER_TIMEOUT_MS=45_000;
-const MEDIA_STALL_TIMEOUT_MS=30_000;
+// Byte-addressable media can be resumed safely. Do not leave the player frozen for the previous
+// 30-second window after an origin has stopped producing bytes.
+const MEDIA_STALL_TIMEOUT_MS=8_000;
+const MEDIA_RESUME_HEADER_TIMEOUT_MS=8_000;
 const MEDIA_RESUME_ATTEMPTS=2;
 
 const strip = headers => Object.fromEntries(Object.entries(headers).filter(([k]) => !HOP.has(k.toLowerCase()) && !['cookie2','x-forwarded-host'].includes(k.toLowerCase())));
@@ -117,10 +118,6 @@ function normalizedUpstreams(route) {
 
 function isPlaybackPath(pathname) {
   return /\/(?:emby\/)?(?:Videos|Audio|LiveTV)\//i.test(pathname) || /\/Items\/[^/]+\/Download/i.test(pathname);
-}
-
-function isPlaybackControlPath(pathname) {
-  return /\/(?:Items\/[^/]+\/)?PlaybackInfo(?:\/|$)/i.test(pathname);
 }
 
 function contentRange(value) {
@@ -432,7 +429,6 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
     try { continuation=continuationTarget(found,key); vod=vodTarget(found,incoming.search); }
     catch { res.writeHead(404,{'cache-control':'no-store'});return res.end('not found'); }
     const {route}=found, playback=continuation?.playback===true||!!vod||isPlaybackPath(found.rest);
-    const mediaAffinity=playback||isPlaybackControlPath(found.rest);
     const configured=continuation?[continuation.target.href]:vod?[vod.target.href]:orderedTargets(route);
     if(metrics&&!metrics.canServe(route)){res.writeHead(509,{'cache-control':'no-store','retry-after':'3600'});return res.end('monthly traffic quota exceeded');}
     const metricDone=metrics?.begin(route,{playback,bytesIn:Number(req.headers['content-length']||0)});
@@ -472,16 +468,15 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
       const target=directTarget||joinTarget(targetValue,found.rest,relaySearch), base=new URL(targetValue), requestHeaders={...originalHeaders};
       requestHeaders.host=target.host;
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
-      const secure=target.protocol==='https:',usesPool=!freshSocket;
-      const selectedAgent=mediaAffinity?(secure?mediaHttpsAgent:mediaHttpAgent):(secure?httpsAgent:httpAgent);
-      // PlaybackInfo and actual media share a dedicated pool, never the general API pool. A forced
-      // retry is one-shot so a poisoned/stale pooled socket cannot be selected again.
-      requestHeaders.connection=freshSocket?'close':'keep-alive';
+      const secure=target.protocol==='https:',usesPool=!playback&&!freshSocket;
+      // PlaybackInfo may reuse the short API pool, but every actual media/seek request is one-shot.
+      // This compatibility-first split matches the fast v0.10.0 data path on mixed Emby/CDN nodes.
+      requestHeaders.connection=usesPool?'keep-alive':'close';
       const tlsKey=secure?tlsSessionKey(target):'';
-      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:usesPool?selectedAgent:false};
-      // Pooled agents handle TLS resumption themselves; forced clean recovery sockets use our shared
-      // session cache so recovery does not add another full handshake.
-      if(secure&&freshSocket){ const sess=tlsSessions.get(tlsKey); if(sess)options.session=sess; }
+      const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:usesPool?(secure?httpsAgent:httpAgent):false};
+      // Pooled API agents handle TLS resumption themselves. One-shot media and recovery sockets use
+      // the shared session cache, retaining the latency win while avoiding HTTP keep-alive reuse.
+      if(secure&&!usesPool){ const sess=tlsSessions.get(tlsKey); if(sess)options.session=sess; }
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
@@ -509,8 +504,8 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
         let measured=false,streamed=0;
         const finishMetric=(failed=false)=>{if(measured)return;measured=true;metricDone?.(status,metricDone?.addBytes?0:streamed,failed||status>=500)};
         // pipeline (unlike .pipe) tears every stream down on failure and never leaves a dangling
-        // half-open response. Short API responses return to the API pool; completed media responses
-        // return only to the isolated media pool so the next segment/seek keeps its warm TCP window.
+        // half-open response. Short API responses return to the API pool; media responses are
+        // intentionally one-shot so the next segment/seek cannot inherit a poisoned connection.
         // pipe upRes through any transforms, then to the client. `stages` is [source, ...transforms];
         // nothing is ever fully buffered, so the client starts receiving bytes immediately.
         const deliver=(...stages)=>{
@@ -548,7 +543,7 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
           });
           activeUp=resumeReq;
           connectGuard=setTimeout(()=>resumeReq.destroy(timeoutError('resume connect timeout')),CONNECT_TIMEOUT_MS);
-          headerGuard=setTimeout(()=>resumeReq.destroy(timeoutError('resume headers timeout')),FAILOVER_HEADER_TIMEOUT_MS);
+          headerGuard=setTimeout(()=>resumeReq.destroy(timeoutError('resume headers timeout')),MEDIA_RESUME_HEADER_TIMEOUT_MS);
           connectGuard.unref?.();headerGuard.unref?.();
           resumeReq.on('socket',socket=>{
             socket.setNoDelay(true);socket.setKeepAlive(true,15_000);

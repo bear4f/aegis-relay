@@ -54,14 +54,17 @@ const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),
 const listenAny=s=>new Promise(r=>s.listen(0,()=>r(s.address().port)));
 const request=(port,path,{method='GET',headers={},body}={})=>new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port,path,method,headers},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);if(body)req.write(body);req.end()});
 test('relay servers use the shared bounded high-throughput socket window',()=>{assert.equal(RELAY_HIGH_WATER_MARK,256*1024);assert.equal(RELAY_SERVER_OPTIONS.highWaterMark,RELAY_HIGH_WATER_MARK);assert.equal(RELAY_SERVER_OPTIONS.noDelay,true);assert.equal(RELAY_SERVER_OPTIONS.keepAlive,true)});
-test('PlaybackInfo warms an isolated media pool without reusing the general API socket',async()=>{
+test('PlaybackInfo stays on the API pool while media and seeks each use a clean socket',async()=>{
   const sockets=[];const upstream=http.createServer((q,s)=>{sockets.push({url:q.url,port:q.socket.remotePort,connection:q.headers.connection});s.end(q.url.includes('/Videos/')?'media':q.url.includes('PlaybackInfo')?'control':'api')}),up=await listen(upstream),key=deriveKey('q'.repeat(32));
   const store={data:{routes:[{id:'clean-media',alias:'clean-media',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/System/Info`)).text(),'api');
   assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Items/1/PlaybackInfo`)).text(),'control');
   assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Videos/1/stream.mp4`,{headers:{range:'bytes=0-'}})).text(),'media');
-  assert.equal(sockets.length,3);assert.notEqual(sockets[0].port,sockets[1].port);assert.equal(sockets[1].port,sockets[2].port);assert.equal(sockets[2].connection,'keep-alive');
+  assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Videos/1/stream.mp4`,{headers:{range:'bytes=1048576-'}})).text(),'media');
+  assert.equal(sockets.length,4);assert.equal(sockets[0].port,sockets[1].port);
+  assert.notEqual(sockets[1].port,sockets[2].port);assert.notEqual(sockets[2].port,sockets[3].port);
+  assert.equal(sockets[2].connection,'close');assert.equal(sockets[3].connection,'close');
   await close(relay);await close(upstream);
 });
 test('an unlimited media response forwards its first small chunk before the origin finishes',async()=>{
