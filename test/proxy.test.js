@@ -1,5 +1,52 @@
-import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';
-import {getRuntimeStatus,makeProxyHandler,RELAY_HIGH_WATER_MARK,RELAY_SERVER_OPTIONS,shouldRewriteStreamBody,stripAdminCredentials,stripAdminSetCookies,validateUpstream,validateUpstreamList} from '../src/proxy.js';import {deriveKey,tokenDigest} from '../src/security.js';
+import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import https from 'node:https';
+import {clearTlsSessions,getRuntimeStatus,makeProxyHandler,RELAY_HIGH_WATER_MARK,RELAY_SERVER_OPTIONS,shouldRewriteStreamBody,stripAdminCredentials,stripAdminSetCookies,validateUpstream,validateUpstreamList} from '../src/proxy.js';import {deriveKey,tokenDigest} from '../src/security.js';
+const TEST_TLS_CERT=`-----BEGIN CERTIFICATE-----
+MIIDGjCCAgKgAwIBAgIUIbeDFssFh3d60STn8JZVJvohWqwwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcyNDA1NTI1MFoXDTM2MDcy
+MTA1NTI1MFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEA9iy6USej/1gfA6i3VMIW50jPmKVZ5eoPoq/7Qhg9rMrv
+Mp4o9ooOPql8fcN1JvapdzKmpwNN3vRJ1uDTLzZIyEBoxzlDqMi9VNxvx5jGItCb
+zZeICOTX8cQeVYLAKuHEPfas8glDcdb/lprAlmFibCvJjwzmuOUQN/9BnvRAq6Zl
+KLDNifU4yioQ3Qz6C54TxJ6n+MJJ82nuDYaTU1TrHG/JmZHPi5EwgLbtrQJD2zan
+weaQ0xNXDTn1qiEFNcZneJlrfIl/vRolek+oLBVSRJZVBy9YndqNcWJBvMN7SAKi
+azjhopT3IE+gLZDgWBX9MXc0Z4nW+OqitSxSJOsvOwIDAQABo2QwYjAdBgNVHQ4E
+FgQUenmbQNQSe/COwsnTsxltYWHxsy0wHwYDVR0jBBgwFoAUenmbQNQSe/COwsnT
+sxltYWHxsy0wDwYDVR0TAQH/BAUwAwEB/zAPBgNVHREECDAGhwR/AAABMA0GCSqG
+SIb3DQEBCwUAA4IBAQCqlmOe4Yp4K58Gla3pxvTHltAE9qfg2eEuVkh2PxsuXNSU
+ZKnl67BQISYqXP7DjiTq1egRxJMvVwXDO3q4MI2Ix3jXkZWj7GQTXBKqKkRVE9O/
+yQ21UmxxHp9VK0tDLhNHtR+D+LjPsy1NypMvxN+nIAcFnAkI8fJKevBtRqqUrHhJ
+1BKdXpbXp91HKLO+o01bcQ6NyERbpUTTGy2qAArJazG7d85F3VOIEchTHQtzL+2Y
+5432ED4S56qXF7qfMVCmiUYvTzexdzwt4v7n+E7uqxRJi3r4LTOvFhC7yGV2JTww
+UW6shJSvafPlYbn9c1fC5ZPZZEa6lh5bAxiPEVD1
+-----END CERTIFICATE-----`;
+const TEST_TLS_KEY=`-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQD2LLpRJ6P/WB8D
+qLdUwhbnSM+YpVnl6g+ir/tCGD2syu8ynij2ig4+qXx9w3Um9ql3MqanA03e9EnW
+4NMvNkjIQGjHOUOoyL1U3G/HmMYi0JvNl4gI5NfxxB5VgsAq4cQ99qzyCUNx1v+W
+msCWYWJsK8mPDOa45RA3/0Ge9ECrpmUosM2J9TjKKhDdDPoLnhPEnqf4wknzae4N
+hpNTVOscb8mZkc+LkTCAtu2tAkPbNqfB5pDTE1cNOfWqIQU1xmd4mWt8iX+9GiV6
+T6gsFVJEllUHL1id2o1xYkG8w3tIAqJrOOGilPcgT6AtkOBYFf0xdzRnidb46qK1
+LFIk6y87AgMBAAECggEAUQTdeRIjzkjxRCIF3FZYdVwoPqPE139WEAP9HH6f5buQ
+R8d30dQT5hmfyEBI0T8C/SDlajgTK9qYZqjtuC8Uext/oHm/Q9B1R3WZMEaehxzC
++kHx2oN+cqpKFXiHyFUvYflKaAoWcWQCEE30Lkn0u4cZugPT92wkD1np/eeDVToz
++Hj1M7V4651giolXGFSaAcjejpsoUUL0rGa3t+y0FH5ued1Qs6zBkgUCBrdswCZu
+NBLfSAsyxEJL4Cks3rSVYqydXjMRKgmNv6XDJ0/zcZIYckTOhnpdz3FS+90RnY3C
+jfyzICd46pKkwWlN8HPz6ce5us+kNiyQg4zhep1I6QKBgQD7865DfH49t6PYzAMW
+Q9qS1nwE361kfX2LoM2+4MrgNPdnkC5y7kgY3CugcSEz+rcn2+ejkyp6bxhMmjXU
+lLA8tUvunzPxsRgsRqXmLXK66sjFLQKMAnRidOAEw6SsBl/mxHSyVjmRZqf5A2OY
+uQ/EcWkdH3iN0obKk3VQCluGnQKBgQD6IUjgzmW6UI82ufVBD9LDVQEgju5h+N6a
+/9seHzDfIR+LcZZqPXBXAGP9zHjxTsgV5DPktH3y+Sc5rdt8r71BkmQY9FrL7hbv
+umF6h/4UWQNjGitFRkzrXAow8p2WXIavgC1131WOmeMZr94G7UDflRsX21IEtEwN
+BKGk1Qk5twKBgQDGuNXLHudHcI/IEGmi5xP/2zJoea/+YchjGAsPsafynXRB+APa
+3Lx69zVlz7UblXVe9+DFMO9BMFzfFoa8zCYRTAG/DUzgJgll6rcxTMmASmzesHig
+y9LWUU7cEx/QGxsLHgrZGo8/ctOr4ZNtwxF/pN/+e3MPkWyFXTcbUYANNQKBgDXS
+b7If93fN2eM2xHVJiFqLsgBlgRoHyS6lG2sx3vxETltdB7a4nbG63clA9E1IXHmJ
+bzkpNWjRAAXDSVVdI2Y2r99GxTrYcosHGe6Z0KxkMvxiJyly5R5H4dGCgzJVmo2t
+ERsqAWj76Agg9a+b4be6h+fsQ4vLmAm9E2M6jA+lAoGBAOebSYeSMYuMzgODkGRO
+kfL9Um4iVQAbDUGrvQbRJ0SjhQloUBXlAZNp28Q5lezjNaENnVeved1N9F8/10Q2
+g5w9ie66oBzW1c1Ve0GaViRTvxESzmJLqd+bEFrYb3v7pSe9j6XQ3E+PcjDn4ExD
+ls0YYpE+ePrxn7w5QCBLTtjZ
+-----END PRIVATE KEY-----`;
 import { newRouteAuthKey, ROUTE_AUTH_VERSION, routeTokenDigest } from '../src/route-auth.js';
 import { AtomicRouteSource } from '../src/local-agent.js';
 const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),close=s=>new Promise(r=>{s.closeAllConnections?.();s.close(r)});
@@ -22,6 +69,20 @@ test('an unlimited media response forwards its first small chunk before the orig
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   const result=await new Promise((resolve,reject)=>{const chunks=[];let sawFirst=false;const q=http.get({hostname:'127.0.0.1',port,path:'/first-byte/Videos/1/stream.mp4',headers:{range:'bytes=0-'}},r=>{r.on('data',chunk=>{chunks.push(chunk);if(!sawFirst){sawFirst=true;assert.equal(chunk.subarray(0,first.length).equals(first),true);setTimeout(release,10)}});r.on('end',()=>resolve(Buffer.concat(chunks)))});q.on('error',reject)});
   assert.equal(result.length,first.length+rest.length);assert.equal(result.subarray(0,first.length).equals(first),true);assert.equal(result.subarray(first.length).equals(rest),true);
+  await close(relay);await close(upstream);
+});
+test('fresh media sockets resume the cached TLS session so startup skips the full handshake',async()=>{
+  const reused=[];
+  const upstream=https.createServer({cert:TEST_TLS_CERT,key:TEST_TLS_KEY},(q,s)=>{reused.push(q.socket.isSessionReused());s.writeHead(206,{'content-type':'video/mp4','content-range':'bytes 0-1/2'});s.end('ab')}),up=await listen(upstream),key=deriveKey('tls'.padEnd(32,'x'));
+  clearTlsSessions();
+  const store={data:{routes:[{id:'tls',alias:'tls',enabled:true,accessMode:'alias_only',upstreams:[`https://127.0.0.1:${up}`],allowPrivate:true,tlsVerify:false}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  assert.equal((await request(port,'/tls/Videos/1/stream.mp4',{headers:{range:'bytes=0-1'}})).body.toString(),'ab');
+  await new Promise(r=>setTimeout(r,80)); // let the post-handshake session ticket be cached
+  assert.equal((await request(port,'/tls/Videos/2/stream.mp4',{headers:{range:'bytes=0-1'}})).body.toString(),'ab');
+  await new Promise(r=>setTimeout(r,30));
+  assert.equal(reused[0],false); // first connection is a full handshake
+  assert.equal(reused[1],true);  // second fresh socket resumes the session
   await close(relay);await close(upstream);
 });
 test('proxy accepts short root alias and legacy /r capability paths',async()=>{const seen=[];const upstream=http.createServer((req,res)=>{seen.push(req.url);res.end('ok')});const upPort=await listen(upstream),key=deriveKey('p'.repeat(32));const store={data:{routes:[{id:'a',alias:'home',enabled:true,upstreams:[`http://127.0.0.1:${upPort}`],accessMode:'key',allowPrivate:true,tlsVerify:true,keyDigest:tokenDigest('capability',key)}]}};const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);for(const path of ['/home/capability/emby/Items?x=1','/r/home/capability/System/Info']){const good=await fetch(`http://127.0.0.1:${port}${path}`);assert.equal(good.status,200);assert.equal(await good.text(),'ok')}assert.deepEqual(seen,['/emby/Items?x=1','/System/Info']);assert.equal((await fetch(`http://127.0.0.1:${port}/home/wrong/`)).status,404);await close(relay);await close(upstream)});
