@@ -13,7 +13,7 @@ function cleanViewers(list){
   const out=[];
   for(const v of Array.isArray(list)?list.slice(0,VIEWER_REPORT_CAP):[]){
     const ip=cleanText(v?.ip,45);if(!ip)continue;
-    out.push({ip,deviceName:cleanText(v.deviceName,80),client:cleanText(v.client,80),deviceId:cleanText(v.deviceId,80),ua:cleanText(v.ua,160),firstSeen:counter(v.firstSeen),lastSeen:counter(v.lastSeen),hits:counter(v.hits)});
+    out.push({ip,deviceName:cleanText(v.deviceName,80),client:cleanText(v.client,80),deviceId:cleanText(v.deviceId,80),ua:cleanText(v.ua,160),channelId:cleanText(v.channelId,40)||'default',firstSeen:counter(v.firstSeen),lastSeen:counter(v.lastSeen),hits:counter(v.hits)});
   }
   return out;
 }

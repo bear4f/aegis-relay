@@ -85,6 +85,19 @@ test('playback requests record the viewer IP and device for the operator',async(
   assert.equal(v.ip,'203.0.113.9');assert.equal(v.deviceName,'Living Room TV');assert.equal(v.client,'Emby for Android');assert.equal(v.deviceId,'dev-xyz');assert.equal(v.hits,2);
   await close(relay);await close(upstream);
 });
+test('a per-user distribution-channel key routes to the node and attributes the viewer to that channel',async()=>{
+  const upstream=http.createServer((q,s)=>s.end('ok')),up=await listen(upstream),key=deriveKey('m'.repeat(32));
+  const primary=newRouteAuthKey(),userKey=newRouteAuthKey();
+  const route={id:'multi',alias:'multi',enabled:true,accessMode:'key',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true,tlsVerify:true,authVersion:ROUTE_AUTH_VERSION,routeAuthKey:primary,keyDigest:routeTokenDigest('owner',primary),channels:[{id:'ch-a',label:'A',authVersion:ROUTE_AUTH_VERSION,routeAuthKey:userKey,keyDigest:routeTokenDigest('userA',userKey)}]};
+  const store={data:{routes:[route]}},metrics=new Metrics({data:{},save(){}});
+  const relay=http.createServer(makeProxyHandler(store,key,metrics)),port=await listen(relay);
+  assert.equal((await request(port,'/multi/userA/Videos/1/stream.mp4',{headers:{'x-real-ip':'9.9.9.9','x-emby-device-id':'dev-A'}})).status,200);
+  assert.equal((await request(port,'/multi/owner/Videos/1/stream.mp4',{headers:{'x-real-ip':'8.8.8.8','x-emby-device-id':'dev-O'}})).status,200);
+  assert.equal((await request(port,'/multi/wrong-key/Videos/1/stream.mp4')).status,404);
+  const node=metrics.snapshot(store.data.routes).nodes[0],chans=new Set(node.viewers.map(v=>v.channelId));
+  assert.ok(chans.has('ch-a'));assert.ok(chans.has('default'));
+  await close(relay);await close(upstream);
+});
 test('fresh media sockets resume the cached TLS session so startup skips the full handshake',async()=>{
   const reused=[];
   const upstream=https.createServer({cert:TEST_TLS_CERT,key:TEST_TLS_KEY},(q,s)=>{reused.push(q.socket.isSessionReused());s.writeHead(206,{'content-type':'video/mp4','content-range':'bytes 0-1/2'});s.end('ab')}),up=await listen(upstream),key=deriveKey('tls'.padEnd(32,'x'));

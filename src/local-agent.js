@@ -47,7 +47,7 @@ export function runtimeRoutes(nodes) {
     allowPrivate:node.allowPrivate,tlsVerify:node.tlsVerify,showOnHome:node.showOnHome,
     clientProfile:node.clientProfile,streamRewrite:node.streamRewrite,speedLimitMbps:node.speedLimitMbps,monthlyQuotaGB:node.monthlyQuotaGB,
     accessMode:node.access.mode,
-    ...(node.access.mode==='key'?{authVersion:node.access.algorithm,routeAuthKey:node.access.routeAuthKey,keyDigest:node.access.digest}:{})
+    ...(node.access.mode==='key'?{authVersion:node.access.algorithm,routeAuthKey:node.access.routeAuthKey,keyDigest:node.access.digest,...(Array.isArray(node.access.channels)&&node.access.channels.length?{channels:node.access.channels.map(c=>({id:c.id,routeAuthKey:c.routeAuthKey,keyDigest:c.digest,authVersion:node.access.algorithm}))}:{})}:{})
   }));
 }
 
