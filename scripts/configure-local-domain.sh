@@ -91,6 +91,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_request_buffering off;
         proxy_buffering off;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
         proxy_max_temp_file_size 0;
         proxy_buffer_size 256k;
         proxy_buffers 4 256k;
