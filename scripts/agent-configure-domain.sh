@@ -32,14 +32,19 @@ server {
         proxy_set_header Connection \$aegis_agent_connection_upgrade;
         proxy_request_buffering off;
         proxy_buffering off;
+        proxy_max_temp_file_size 0;
         # With buffering disabled this is the maximum read size per event. The platform default is
         # only one memory page (4K/8K), which creates needless syscall churn on fast media streams.
         proxy_buffer_size 256k;
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 512k;
-        proxy_ignore_headers X-Accel-Buffering;
+        proxy_ignore_headers X-Accel-Buffering X-Accel-Limit-Rate;
+        proxy_socket_keepalive on;
+        proxy_limit_rate 0;
+        limit_rate 0;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+        send_timeout 3600s;
     }
 }
 EOF

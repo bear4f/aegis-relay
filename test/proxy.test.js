@@ -54,13 +54,14 @@ const listen=s=>new Promise(r=>s.listen(0,'127.0.0.1',()=>r(s.address().port))),
 const listenAny=s=>new Promise(r=>s.listen(0,()=>r(s.address().port)));
 const request=(port,path,{method='GET',headers={},body}={})=>new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port,path,method,headers},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);if(body)req.write(body);req.end()});
 test('relay servers use the shared bounded high-throughput socket window',()=>{assert.equal(RELAY_HIGH_WATER_MARK,256*1024);assert.equal(RELAY_SERVER_OPTIONS.highWaterMark,RELAY_HIGH_WATER_MARK);assert.equal(RELAY_SERVER_OPTIONS.noDelay,true);assert.equal(RELAY_SERVER_OPTIONS.keepAlive,true)});
-test('media bodies use a clean upstream connection instead of reusing the preceding API socket',async()=>{
-  const sockets=[];const upstream=http.createServer((q,s)=>{sockets.push({url:q.url,port:q.socket.remotePort,connection:q.headers.connection});s.end(q.url.includes('/Videos/')?'media':'api')}),up=await listen(upstream),key=deriveKey('q'.repeat(32));
+test('PlaybackInfo warms an isolated media pool without reusing the general API socket',async()=>{
+  const sockets=[];const upstream=http.createServer((q,s)=>{sockets.push({url:q.url,port:q.socket.remotePort,connection:q.headers.connection});s.end(q.url.includes('/Videos/')?'media':q.url.includes('PlaybackInfo')?'control':'api')}),up=await listen(upstream),key=deriveKey('q'.repeat(32));
   const store={data:{routes:[{id:'clean-media',alias:'clean-media',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/System/Info`)).text(),'api');
+  assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Items/1/PlaybackInfo`)).text(),'control');
   assert.equal(await(await fetch(`http://127.0.0.1:${port}/clean-media/Videos/1/stream.mp4`,{headers:{range:'bytes=0-'}})).text(),'media');
-  assert.equal(sockets.length,2);assert.notEqual(sockets[0].port,sockets[1].port);assert.equal(sockets[1].connection,'close');
+  assert.equal(sockets.length,3);assert.notEqual(sockets[0].port,sockets[1].port);assert.equal(sockets[1].port,sockets[2].port);assert.equal(sockets[2].connection,'keep-alive');
   await close(relay);await close(upstream);
 });
 test('an unlimited media response forwards its first small chunk before the origin finishes',async()=>{
@@ -70,6 +71,22 @@ test('an unlimited media response forwards its first small chunk before the orig
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
   const result=await new Promise((resolve,reject)=>{const chunks=[];let sawFirst=false;const q=http.get({hostname:'127.0.0.1',port,path:'/first-byte/Videos/1/stream.mp4',headers:{range:'bytes=0-'}},r=>{r.on('data',chunk=>{chunks.push(chunk);if(!sawFirst){sawFirst=true;assert.equal(chunk.subarray(0,first.length).equals(first),true);setTimeout(release,10)}});r.on('end',()=>resolve(Buffer.concat(chunks)))});q.on('error',reject)});
   assert.equal(result.length,first.length+rest.length);assert.equal(result.subarray(0,first.length).equals(first),true);assert.equal(result.subarray(first.length).equals(rest),true);
+  await close(relay);await close(upstream);
+});
+test('a byte-addressable media response resumes after the origin drops mid-stream',async()=>{
+  const media=Buffer.alloc(384*1024);for(let i=0;i<media.length;i++)media[i]=i%251;
+  const ranges=[];let first=true;
+  const upstream=http.createServer((q,s)=>{
+    ranges.push(q.headers.range||'');
+    const match=/^bytes=(\d+)-(\d*)$/.exec(String(q.headers.range||'')),start=match?Number(match[1]):0,end=match&&match[2]?Number(match[2]):media.length-1;
+    s.writeHead(206,{'content-type':'video/mp4','accept-ranges':'bytes','content-length':end-start+1,'content-range':`bytes ${start}-${end}/${media.length}`,etag:'"stable-media"'});
+    if(first){first=false;const cut=96*1024;s.write(media.subarray(start,start+cut),()=>setTimeout(()=>s.socket.destroy(),5));}
+    else s.end(media.subarray(start,end+1));
+  }),up=await listen(upstream),key=deriveKey('resume'.padEnd(32,'x'));
+  const store={data:{routes:[{id:'resume',alias:'resume',enabled:true,accessMode:'alias_only',upstreams:[`http://127.0.0.1:${up}`],allowPrivate:true}]}};
+  const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
+  const response=await request(port,'/resume/Videos/1/stream.mp4',{headers:{range:`bytes=0-${media.length-1}`}});
+  assert.equal(response.status,206);assert.equal(response.body.equals(media),true);assert.equal(ranges.length,2);assert.match(ranges[1],/^bytes=98304-/);
   await close(relay);await close(upstream);
 });
 test('playback requests record the viewer IP and device for the operator',async()=>{
@@ -98,9 +115,9 @@ test('a per-user distribution-channel key routes to the node and attributes the 
   assert.ok(chans.has('ch-a'));assert.ok(chans.has('default'));
   await close(relay);await close(upstream);
 });
-test('fresh media sockets resume the cached TLS session so startup skips the full handshake',async()=>{
+test('a media origin that closes keep-alive still resumes TLS on the next clean socket',async()=>{
   const reused=[];
-  const upstream=https.createServer({cert:TEST_TLS_CERT,key:TEST_TLS_KEY},(q,s)=>{reused.push(q.socket.isSessionReused());s.writeHead(206,{'content-type':'video/mp4','content-range':'bytes 0-1/2'});s.end('ab')}),up=await listen(upstream),key=deriveKey('tls'.padEnd(32,'x'));
+  const upstream=https.createServer({cert:TEST_TLS_CERT,key:TEST_TLS_KEY},(q,s)=>{reused.push(q.socket.isSessionReused());s.writeHead(206,{'content-type':'video/mp4','content-length':'2','content-range':'bytes 0-1/2','connection':'close'});s.end('ab')}),up=await listen(upstream),key=deriveKey('tls'.padEnd(32,'x'));
   clearTlsSessions();
   const store={data:{routes:[{id:'tls',alias:'tls',enabled:true,accessMode:'alias_only',upstreams:[`https://127.0.0.1:${up}`],allowPrivate:true,tlsVerify:false}]}};
   const relay=http.createServer(makeProxyHandler(store,key)),port=await listen(relay);
