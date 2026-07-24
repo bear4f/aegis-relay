@@ -16,6 +16,14 @@ test('recordAccess folds repeat requests per viewer and counts distinct IPs/devi
   assert.equal(summarizeViewers({}).distinctIps,0);
 });
 
+test('a single device on many dynamic IPs stays one device (no false shared-relay signal)',()=>{
+  const store={data:{},save(){}},metrics=new Metrics(store),route={id:'dyn',alias:'dyn'};
+  for(let i=0;i<12;i++)metrics.recordAccess(route,{ip:`100.64.0.${i}`,deviceId:'phone-1',deviceName:'My Phone',client:'Emby'});
+  const node=metrics.snapshot([route]).nodes[0];
+  assert.equal(node.distinctDevices,1); // one physical device despite 12 IPs — the alert metric
+  assert.equal(node.distinctIps,12);    // dynamic IPs are informational only
+});
+
 test('metrics account for requests, playback and quota',()=>{const store={data:{},save(){}};const metrics=new Metrics(store),route={id:'n1',alias:'home',monthlyQuotaGB:0.0000001};const done=metrics.begin(route,{playback:true,bytesIn:12});done(200,120,false);const view=metrics.snapshot([route]),node=view.nodes[0];assert.equal(node.requests,1);assert.equal(node.playbackRequests,1);assert.equal(node.bytesIn,12);assert.equal(node.bytesOut,120);assert.equal(metrics.canServe(route),false)});
 test('zero-rate transform counts bytes without delaying',async()=>{const t=new ThrottleTransform(0),chunks=[];t.on('data',c=>chunks.push(c));t.end(Buffer.from('hello'));await new Promise(r=>t.on('end',r));assert.equal(t.bytes,5);assert.equal(Buffer.concat(chunks).toString(),'hello')});
 test('streaming traffic is visible before a long response finishes',async()=>{const store={data:{},save(){}},metrics=new Metrics(store),route={id:'stream',alias:'stream'},done=metrics.begin(route,{playback:true}),transform=new ThrottleTransform(0,bytes=>done.addBytes(bytes));transform.resume();transform.write(Buffer.alloc(4096));assert.equal(metrics.snapshot([route]).totalBytes,4096);assert.equal(metrics.snapshot([route]).active,1);transform.end();await new Promise(resolve=>transform.on('end',resolve));done(200,0,false);assert.equal(metrics.snapshot([route]).active,0);assert.equal(metrics.snapshot([route]).totalBytes,4096)});

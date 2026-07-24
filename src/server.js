@@ -119,7 +119,10 @@ function accessSummaryById(machines){
   for(const m of machines)for(const n of (m.telemetry?.nodes||[])){const e=byId.get(n.id)||{distinctIps:0,distinctDevices:0};e.distinctIps=Math.max(e.distinctIps,Number(n.distinctIps||0));e.distinctDevices=Math.max(e.distinctDevices,Number(n.distinctDevices||0));byId.set(n.id,e);}
   return byId;
 }
-function suspiciousNode(route,summary){const t=Number(route.accessAlertThreshold||0);return t>0&&Number(summary?.distinctIps||0)>t;}
+// Alert on distinct DEVICES, not IPs: mainland dynamic IPs (WiFi/5G/CGNAT) churn one legitimate
+// viewer across many IPs, but an Emby device id is stable per player, and a household has a bounded
+// device count — a redistributed relay is what shows a spike of distinct devices.
+function suspiciousNode(route,summary){const t=Number(route.accessAlertThreshold||0);return t>0&&Number(summary?.distinctDevices||0)>t;}
 function dashboardSnapshot(){
   const {localSnapshot,machines}=machineTelemetryList();
   const combined=aggregateTelemetry(machines.map(machine=>machine.telemetry));
@@ -140,8 +143,8 @@ function accessSnapshot(){
   }
   return store.data.routes.map(r=>{
     const e=byId.get(r.id)||{viewers:new Map(),mIps:0,mDevices:0},viewers=[...e.viewers.values()].sort((a,b)=>b.lastSeen-a.lastSeen);
-    const distinctIps=Math.max(new Set(viewers.map(v=>v.ip)).size,e.mIps),distinctDevices=Math.max(new Set(viewers.map(v=>v.deviceId||v.deviceName||v.ua||v.ip)).size,e.mDevices),threshold=Number(r.accessAlertThreshold||0);
-    return {id:r.id,alias:r.alias,name:r.name,threshold,distinctIps,distinctDevices,suspicious:threshold>0&&distinctIps>threshold,viewers:viewers.slice(0,200)};
+    const distinctIps=Math.max(new Set(viewers.map(v=>v.ip)).size,e.mIps),distinctDevices=Math.max(new Set(viewers.map(v=>v.deviceId||v.deviceName||v.ua).filter(Boolean)).size,e.mDevices),threshold=Number(r.accessAlertThreshold||0);
+    return {id:r.id,alias:r.alias,name:r.name,threshold,distinctIps,distinctDevices,suspicious:threshold>0&&distinctDevices>threshold,viewers:viewers.slice(0,200)};
   });
 }
 
