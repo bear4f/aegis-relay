@@ -32,6 +32,16 @@ export const RELAY_SERVER_OPTIONS=Object.freeze({highWaterMark:RELAY_HIGH_WATER_
 const AGENT_OPTIONS = { keepAlive:true, keepAliveMsecs:15_000, maxSockets:512, maxFreeSockets:64, maxTotalSockets:1024, timeout:75_000, scheduling:'lifo', highWaterMark:RELAY_HIGH_WATER_MARK };
 const httpAgent = new http.Agent(AGENT_OPTIONS);
 const httpsAgent = new https.Agent(AGENT_OPTIONS);
+// Playback opens a fresh (unpooled) TLS socket per request on purpose, but a full TLS handshake on
+// each one adds ~2 round trips before the first media byte — the biggest remaining "slow to start"
+// cost on a distant HTTPS Emby. We cache the last TLS session per origin and resume from it, so a
+// fresh socket completes its handshake in ~1 RTT. The cache is fed by every upstream connection —
+// including the login/API traffic that runs before playback — so even the very first play resumes.
+const TLS_SESSION_MAX=1024;
+const tlsSessions=new Map();
+function tlsSessionKey(target){ return `${target.hostname}\0${target.port||'443'}`; }
+function rememberTlsSession(key,session){ if(!key||!session)return; tlsSessions.delete(key); tlsSessions.set(key,session); if(tlsSessions.size>TLS_SESSION_MAX)tlsSessions.delete(tlsSessions.keys().next().value); }
+export function clearTlsSessions(){ tlsSessions.clear(); }
 const CONNECT_TIMEOUT_MS=10_000;
 const RESPONSE_HEADER_TIMEOUT_MS=60_000;
 const FAILOVER_HEADER_TIMEOUT_MS=15_000;
@@ -386,7 +396,11 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
       if (!routeOrigins.has(target.origin)) { delete requestHeaders.authorization; delete requestHeaders.cookie; delete requestHeaders['x-emby-token']; }
       const secure=target.protocol==='https:',usesPool=!playback&&!freshSocket;
       if(playback)requestHeaders.connection='close';
+      const tlsKey=secure?tlsSessionKey(target):'';
       const options={protocol:target.protocol,hostname:target.hostname,port:target.port,method:req.method,path:target.pathname+target.search,headers:requestHeaders,servername:target.hostname,rejectUnauthorized:route.tlsVerify!==false,lookup:guardedLookup(route.allowPrivate),highWaterMark:RELAY_HIGH_WATER_MARK,agent:usesPool?(secure?httpsAgent:httpAgent):false};
+      // Resume the cached TLS session on unpooled (playback / fresh-socket) HTTPS connections. Pooled
+      // connections skip this — their agent already resumes internally across reuse.
+      if(secure&&!usesPool){ const sess=tlsSessions.get(tlsKey); if(sess)options.session=sess; }
       // Short guard for the TCP connect only; once connected, allow a long idle window so slow
       // transcode starts and paused streams are not killed (Nginx uses proxy_read_timeout 3600s).
       const up=(target.protocol==='https:'?https:http).request(options,upRes=>{
@@ -460,6 +474,9 @@ export function makeProxyHandler(routeSource, key, metrics = null) {
       up.on('socket',s=>{
         s.setNoDelay(true);s.setKeepAlive(true,15_000);
         if(!s.connecting)return clearTimeout(connectTimer);
+        // Capture TLS session tickets from every new connection (API and media) so later unpooled
+        // playback sockets to the same origin can resume instead of doing a full handshake.
+        if(secure)s.on('session',sess=>rememberTlsSession(tlsKey,sess));
         // TCP connect is not enough for HTTPS: keep the guard running until the TLS handshake has
         // completed, otherwise a stalled secureConnect can hold playback for the full idle timeout.
         s.once(secure?'secureConnect':'connect',()=>clearTimeout(connectTimer));
