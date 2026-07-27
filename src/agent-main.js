@@ -60,8 +60,10 @@ async function enroll(){
   }
   const pinned={...identity,agentId:result.agentId,panelKeyId:result.panelKeyId,panelSigningPublicKey:result.panelSigningPublicKey,panelUrl:PANEL_URL,enrolledAt:new Date().toISOString()};verifyResponse(response,raw,pinned,requestNonce);
   // A re-enrollment replaces the machine's identity; the cached config/metrics were sealed with the
-  // old storage key and are unreadable now, so drop them and let the agent re-sync from the panel.
-  if(alreadyEnrolled)for(const file of [CURRENT_FILE,PREVIOUS_FILE,METRICS_FILE]){try{fs.rmSync(file,{force:true});}catch{}}
+  // old storage key and are unreadable now, and a leftover host-domain status would make the agent keep
+  // reporting the previous life's domain — drop them all so the agent re-syncs and reports the freshly
+  // configured domain.
+  if(alreadyEnrolled)for(const file of [CURRENT_FILE,PREVIOUS_FILE,METRICS_FILE,DOMAIN_STATUS_FILE,DOMAIN_REQUEST_FILE]){try{fs.rmSync(file,{force:true});}catch{}}
   writeAtomic(IDENTITY_FILE,JSON.stringify(pinned));console.log(`AegisRelay Agent registered: ${result.agentId}`);
 }
 

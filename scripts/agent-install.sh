@@ -63,6 +63,10 @@ TOKEN_ENV="$TMP_DIR/enroll.env"
 # re-run of the same command from aborting with a stack trace.
 docker run --rm --user 10001:10001 --env-file "$TOKEN_ENV" -v "$INSTALL_DIR/data:/app/agent-data" aegis-relay-agent:local node src/agent-main.js --enroll
 rm -f "$TOKEN_ENV"; TOKEN=
+# This install (re)establishes the domain from --domain (AGENT_DOMAIN in .env) and reconfigures Nginx
+# + cert below. A host-domain status/request left from a previous life on this machine would otherwise
+# make the agent keep reporting the OLD domain, so clear them and let the freshly configured one win.
+rm -f "$INSTALL_DIR/data/host-domain-status.json" "$INSTALL_DIR/data/host-domain-request.json"
 {
   printf 'PANEL_URL=%s\n' "$PANEL"
   printf 'AGENT_DOMAIN=%s\n' "$DOMAIN"
