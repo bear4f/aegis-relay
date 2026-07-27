@@ -39,15 +39,30 @@ function verifyResponse(response,raw,identity,nonce){const timestamp=Number(resp
 
 async function enroll(){
   fs.mkdirSync(DATA_DIR,{recursive:true,mode:0o700});
-  // Re-running the install command on an already-enrolled machine is a no-op, not an error: the
-  // identity is written only after the panel confirms enrollment (below), so its presence means a
-  // completed registration. Skip cleanly instead of aborting the installer with a stack trace.
-  if(fs.existsSync(IDENTITY_FILE)){console.log('AegisRelay Agent 已注册，跳过注册（保留现有身份）。如需重新注册，请先删除 identity.json 再执行。');return;}
-  const token=String(process.env.ENROLLMENT_TOKEN||'');if(!token)throw new Error('ENROLLMENT_TOKEN is required');
+  const token=String(process.env.ENROLLMENT_TOKEN||''),alreadyEnrolled=fs.existsSync(IDENTITY_FILE);
+  // Enrollment is driven by the token, not merely by whether an identity file exists. A fresh valid
+  // token is explicit intent to (re-)register THIS machine, so it must go through even when a stale
+  // identity is left over from an earlier install — otherwise a reinstall silently keeps the old,
+  // panel-unknown identity and the agent never appears / can't sync (502s). Without a token there is
+  // nothing to do but keep what is already there.
+  if(!token){
+    if(alreadyEnrolled){console.log('AegisRelay Agent 已注册，且未提供注册令牌，保留现有身份。');return;}
+    throw new Error('ENROLLMENT_TOKEN is required');
+  }
   const identity=newIdentity(),requestNonce=randomToken(16),payload={protocolVersion:1,requestNonce,token,agent:{name:String(process.env.AGENT_NAME||os.hostname()).slice(0,80),signPublicKey:identity.signPublicKey,boxPublicKey:identity.boxPublicKey,agentVersion:VERSION,capabilities:['registry-v1','config-v1','proxy-v1','telemetry-v1']},machine:{hostname:os.hostname().slice(0,80),architecture:process.arch,platform:process.platform}};
   const response=await fetch(`${PANEL_URL}/api/agent/v1/enroll`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}),raw=Buffer.from(await response.arrayBuffer()),result=JSON.parse(raw.toString('utf8'));
-  if(!response.ok)throw new Error(result.error||`enrollment failed (${response.status})`);
-  const pinned={...identity,agentId:result.agentId,panelKeyId:result.panelKeyId,panelSigningPublicKey:result.panelSigningPublicKey,panelUrl:PANEL_URL,enrolledAt:new Date().toISOString()};verifyResponse(response,raw,pinned,requestNonce);writeAtomic(IDENTITY_FILE,JSON.stringify(pinned));console.log(`AegisRelay Agent registered: ${result.agentId}`);
+  if(!response.ok){
+    // A spent/expired token on an already-enrolled machine is just an accidental re-run of the same
+    // install command — keep the working identity instead of aborting the installer with a stack
+    // trace. A failed first-time enrollment is a real error.
+    if(alreadyEnrolled){console.log(`注册令牌无效或已使用（${String(result.error||response.status)}）；本机已注册，保留现有身份。如需重新注册，请在面板重新生成安装命令。`);return;}
+    throw new Error(result.error||`enrollment failed (${response.status})`);
+  }
+  const pinned={...identity,agentId:result.agentId,panelKeyId:result.panelKeyId,panelSigningPublicKey:result.panelSigningPublicKey,panelUrl:PANEL_URL,enrolledAt:new Date().toISOString()};verifyResponse(response,raw,pinned,requestNonce);
+  // A re-enrollment replaces the machine's identity; the cached config/metrics were sealed with the
+  // old storage key and are unreadable now, so drop them and let the agent re-sync from the panel.
+  if(alreadyEnrolled)for(const file of [CURRENT_FILE,PREVIOUS_FILE,METRICS_FILE]){try{fs.rmSync(file,{force:true});}catch{}}
+  writeAtomic(IDENTITY_FILE,JSON.stringify(pinned));console.log(`AegisRelay Agent registered: ${result.agentId}`);
 }
 
 async function signedRequest(identity,method,pathAndQuery,payload=null){

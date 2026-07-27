@@ -57,14 +57,11 @@ TOKEN_ENV="$TMP_DIR/enroll.env"
   printf 'AGENT_NAME=%s\n' "$NAME"
   printf 'AGENT_DOMAIN=%s\n' "$DOMAIN"
 } > "$TOKEN_ENV"
-# Idempotent install: an existing identity means this machine is already enrolled. Re-running the
-# installer then just refreshes the code and restarts the container — it must not try to enroll again
-# (the one-time token is already spent) and must not abort the script.
-if [ -f "$INSTALL_DIR/data/identity.json" ]; then
-  echo "检测到本机已注册（identity.json 已存在），跳过注册，保留现有身份，仅更新代码与容器。"
-else
-  docker run --rm --user 10001:10001 --env-file "$TOKEN_ENV" -v "$INSTALL_DIR/data:/app/agent-data" aegis-relay-agent:local node src/agent-main.js --enroll
-fi
+# Always attempt enrollment with the supplied token; enroll() itself is idempotent — a fresh valid
+# token (re-)registers this machine, while a spent/expired token on an already-enrolled machine is a
+# no-op instead of a hard error. This keeps reinstall-with-a-new-token working AND stops the accidental
+# re-run of the same command from aborting with a stack trace.
+docker run --rm --user 10001:10001 --env-file "$TOKEN_ENV" -v "$INSTALL_DIR/data:/app/agent-data" aegis-relay-agent:local node src/agent-main.js --enroll
 rm -f "$TOKEN_ENV"; TOKEN=
 {
   printf 'PANEL_URL=%s\n' "$PANEL"
