@@ -77,6 +77,31 @@ export function remoteAgentStatus(agent, now=Date.now()) {
   return 'offline';
 }
 
+// The public entry URL a node is actually distributed on: a remote agent serves it on its own domain
+// (https) or public IP (http, IP-mode), whereas the panel/local agent serves it on the panel domain.
+// Returns '' for the local agent or an agent without a known host, so callers fall back to the panel.
+export function agentEntryUrl(agent) {
+  if(!agent||agent.id===LOCAL_AGENT_ID)return '';
+  const host=String(agent.domain||'').trim();
+  if(!host)return '';
+  const mode=agent.proxyMode||(agent.domain?'domain':'ip');
+  return `${mode==='ip'?'http':'https'}://${host}`;
+}
+
+// Where a node's client address should point. A node deployed to a remote agent is distributed on that
+// agent's domain/IP, not the panel's — so prefer the first remote deployment's entry URL and fall back
+// to the panel base only when the node is served locally (or the remote host is not yet known).
+export function routeEntryBaseUrl(data, routeId, fallback) {
+  const deployments=Array.isArray(data?.deployments)?data.deployments:[];
+  const agents=Array.isArray(data?.agents)?data.agents:[];
+  for(const item of deployments){
+    if(item.routeId!==routeId||item.enabled===false||item.agentId===LOCAL_AGENT_ID)continue;
+    const url=agentEntryUrl(agents.find(agent=>agent.id===item.agentId));
+    if(url)return url;
+  }
+  return fallback;
+}
+
 export function publicAgent(agent, data, runtime=null, now=Date.now()) {
   const local=agent.id===LOCAL_AGENT_ID,status=local?(runtime?.status||'online'):remoteAgentStatus(agent,now);
   return {

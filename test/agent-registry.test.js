@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureAgentRegistry, normalizeAgentDomain, publicAgent, replaceAgentDeployments, routesForAgent } from '../src/agent-registry.js';
+import { agentEntryUrl, ensureAgentRegistry, normalizeAgentDomain, publicAgent, replaceAgentDeployments, routeEntryBaseUrl, routesForAgent } from '../src/agent-registry.js';
 
 const routes=[
   {id:'route-a',alias:'alpha',name:'Alpha'},
@@ -33,4 +33,29 @@ test('an uninstalled remote agent remains visible as offline until manually dele
   const view=publicAgent(agent,data,null,new Date('2026-07-21T00:10:00.000Z').getTime());
   assert.equal(view.status,'offline');
   assert.equal(view.canDelete,true);
+});
+
+test("a node's client address follows the remote agent it is deployed to, not the panel domain", () => {
+  const data={
+    routes:[{id:'r1',alias:'xqhk'}],
+    agents:[
+      {id:'local',name:'本地 Agent'},
+      {id:'hk',name:'HK-SIM',proxyMode:'domain',domain:'hk.emby.edenflix.cc'},
+      {id:'us',name:'US-IP',proxyMode:'ip',domain:'203.0.113.7'}
+    ],
+    deployments:[
+      {agentId:'local',routeId:'r1',enabled:true},
+      {agentId:'hk',routeId:'r1',enabled:true}
+    ]
+  };
+  const panel='https://emby.edenflix.cc';
+  // deployed to the HK domain agent → distributed on that agent's HTTPS domain, not the panel
+  assert.equal(routeEntryBaseUrl(data,'r1',panel),'https://hk.emby.edenflix.cc');
+  // an IP-mode agent is reached over plain HTTP on its public IP
+  assert.equal(agentEntryUrl(data.agents[2]),'http://203.0.113.7');
+  // the local agent and unknown hosts never override the panel fallback
+  assert.equal(agentEntryUrl(data.agents[0]),'');
+  assert.equal(routeEntryBaseUrl({...data,deployments:[{agentId:'local',routeId:'r1',enabled:true}]},'r1',panel),panel);
+  // a disabled remote deployment does not hijack the address
+  assert.equal(routeEntryBaseUrl({...data,deployments:[{agentId:'hk',routeId:'r1',enabled:false}]},'r1',panel),panel);
 });
