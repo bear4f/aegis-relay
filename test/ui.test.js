@@ -40,3 +40,8 @@ test('single-domain panel setup clears any stale split reverse-proxy domain, whi
   assert.match(single,/set_env LOCAL_PROXY_BASE_URL ""/);
   assert.match(single,/set_env PUBLIC_BASE_URL "https:\/\/\$DOMAIN"/);
   assert.match(split,/set_env LOCAL_PROXY_BASE_URL "https:\/\/\$PROXY_DOMAIN"/);});
+test('new-node drawer can pick a deploy agent so the created address uses that machine domain',()=>{const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8'),js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
+  assert.match(html,/id="deploy-agent"/);assert.match(html,/id="deploy-agent-field"/);
+  assert.match(js,/populateDeployAgents/);assert.match(js,/agentId:value\('#deploy-agent'\)/);
+  // create endpoint deploys onto the chosen agent so credentialsFor()/routeBaseUrl uses its domain
+  assert.match(server,/deployAgentId/);assert.match(server,/deploymentId\(deployAgentId,r\.id\)/);});
