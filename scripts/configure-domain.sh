@@ -99,6 +99,11 @@ set_env SECURE_COOKIES true
 set_env ADMIN_PUBLISH_IP 127.0.0.1
 set_env PROXY_PUBLISH_IP 127.0.0.1
 set_env PUBLIC_BASE_URL "https://$DOMAIN"
+# This configures a SINGLE-domain panel (admin + Emby on one host). Clear any split reverse-proxy
+# domain from a previous life, or the panel would keep splitDomains=true against a proxy host Nginx no
+# longer serves — node requests on the panel domain would then 404 and client addresses would point at
+# a dead domain. The split wizard re-sets this right after via configure-local-domain.sh.
+set_env LOCAL_PROXY_BASE_URL ""
 set_env CERTIFICATE_EMAIL "$EMAIL"
 cd "$INSTALL_DIR"
 if docker compose version >/dev/null 2>&1; then docker compose up -d --force-recreate; else docker-compose up -d --force-recreate; fi
