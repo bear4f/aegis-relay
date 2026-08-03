@@ -22,7 +22,9 @@ case "$PANEL" in https://*) ;; *) echo "面板地址必须使用 HTTPS" >&2; exi
 [ -n "$TOKEN" ] && [ -n "$NAME" ] || { echo "注册参数不完整" >&2; exit 1; }
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update
+  # 第三方软件源失效（如 402/GPG 过期）不应中断本脚本：所需软件包通常已安装，
+  # 真正缺包时下面的 apt-get install 仍会明确报错。
+  apt-get update || echo "警告：apt 源索引更新失败（常见于机器上某个第三方软件源失效），将沿用现有索引继续。" >&2
   DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl tar
   command -v docker >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
   if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then

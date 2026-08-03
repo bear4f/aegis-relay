@@ -64,3 +64,15 @@ test('agent container recreate recovers from a port held by a stale container in
     // when this agent is the sole workload; otherwise just instruct the operator.
     assert.match(script,/docker ps -q .*\| head -n1/,`${name} should only auto-restart docker when no other container runs`);
   }});
+test('a broken third-party APT repo cannot abort installers or entry reconfiguration',()=>{const files=['../scripts/agent-configure-domain.sh','../scripts/agent-configure-ip.sh','../scripts/configure-domain.sh','../scripts/configure-local-domain.sh','../scripts/agent-install.sh','../scripts/bootstrap.sh'];
+  for(const file of files){const script=fs.readFileSync(new URL(file,import.meta.url),'utf8');
+    // These scripts run under `set -eu`, so a bare `apt-get update` lets any unrelated dead repo on the
+    // machine (e.g. a 402 from a third-party source) abort the whole install/reconfigure.
+    assert.doesNotMatch(script,/^\s*apt-get update\s*$/m,`${file} must not let apt-get update abort the script`);
+    assert.match(script,/apt-get update \|\| echo/,`${file} should warn and continue when apt indexes fail`);
+    // The install itself stays fatal, so a genuinely missing package is still a hard error.
+    assert.match(script,/apt-get install -y/,`${file} should still install packages`);}
+  // A failed entry reconfiguration must be reported, not swallowed by `|| true`.
+  const upgrade=fs.readFileSync(new URL('../scripts/agent-upgrade.sh',import.meta.url),'utf8');
+  assert.doesNotMatch(upgrade,/agent-configure-(ip|domain)\.sh[^\n]*\|\| true/,'upgrade must not silently swallow a failed entry reconfigure');
+  assert.match(upgrade,/Nginx 仍沿用旧配置/,'upgrade should warn that the new Nginx tuning was not applied');});

@@ -15,7 +15,9 @@ ADMIN_PATH=$(sed -n 's/^ADMIN_PATH=//p' "$INSTALL_DIR/.env" | head -n1 | sed 's#
 printf '%s' "$PANEL_DOMAIN" | grep -Eq '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$' || { echo "PUBLIC_BASE_URL 中的面板域名无效" >&2; exit 1; }
 [ -n "$ADMIN_PATH" ] || { echo "ADMIN_PATH 缺失" >&2; exit 1; }
 [ "$PANEL_DOMAIN" != "$PROXY_DOMAIN" ] || { echo "面板域名与代理域名必须不同" >&2; exit 1; }
-apt-get update
+# 第三方软件源失效（如 402/GPG 过期）不应中断本脚本：所需软件包通常已安装，
+# 真正缺包时下面的 apt-get install 仍会明确报错。
+apt-get update || echo "警告：apt 源索引更新失败（常见于机器上某个第三方软件源失效），将沿用现有索引继续。" >&2
 DEBIAN_FRONTEND=noninteractive apt-get install -y nginx certbot python3-certbot-nginx
 PUBLIC_IP=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)
 DNS_IP=$(getent ahostsv4 "$PROXY_DOMAIN" | awk 'NR==1{print $1}')

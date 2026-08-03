@@ -102,9 +102,11 @@ MODE=$(sed -n 's/^AGENT_PROXY_MODE=//p' "$INSTALL_DIR/.env" | head -n1)
 # Re-assert whichever入口 this machine already uses so Nginx stays consistent with the new build;
 # both configure scripts are idempotent. env-persisted mode/domain means the入口 survives upgrades.
 if [ "$MODE" = ip ]; then
-  "$INSTALL_DIR/agent-configure-ip.sh" || true
+  # Never fail the upgrade over this (the new agent is already running), but do not hide it either:
+  # a silently skipped re-config means the machine keeps the OLD Nginx tuning after an update.
+  "$INSTALL_DIR/agent-configure-ip.sh" || echo "警告：IP 反代入口重新配置失败，Nginx 仍沿用旧配置（本次更新的 Nginx 调优未应用）。修复后执行: sudo aegis-relay-agent ip" >&2
 elif [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
-  "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL" || true
+  "$INSTALL_DIR/agent-configure-domain.sh" "$DOMAIN" "$EMAIL" || echo "警告：域名入口重新配置失败，Nginx 仍沿用旧配置（本次更新的 Nginx 调优未应用）。修复后执行: sudo aegis-relay-agent domain $DOMAIN $EMAIL" >&2
 else
   echo "若尚未配置入口，请执行 HTTPS: sudo aegis-relay-agent domain 域名 邮箱，或 IP 反代: sudo aegis-relay-agent ip"
 fi
