@@ -6,8 +6,20 @@ compose(){ cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then do
 do_status(){ compose ps; }
 do_logs(){ compose logs -f --tail=200; }
 do_update(){ sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)"; }
-do_domain(){ "$INSTALL_DIR/agent-configure-domain.sh" "$1" "$2"; compose up -d --force-recreate; }
-do_ip(){ "$INSTALL_DIR/agent-configure-ip.sh"; compose up -d --force-recreate; }
+# --force-recreate stops the old container first, so a "port is already allocated" failure would leave
+# the machine with no agent at all (offline in the panel). Recover by tearing down and removing any
+# stale container — usually one from the other Compose naming scheme — then start again. ./data is a
+# host bind mount, so the registered identity and cached config survive.
+recreate(){
+  if compose up -d --force-recreate --remove-orphans; then return 0; fi
+  echo "容器重建失败（端口可能被残留容器占用），正在清理后重试…" >&2
+  compose down --remove-orphans >/dev/null 2>&1 || true
+  STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
+  [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true
+  compose up -d --force-recreate --remove-orphans
+}
+do_domain(){ "$INSTALL_DIR/agent-configure-domain.sh" "$1" "$2"; recreate; }
+do_ip(){ "$INSTALL_DIR/agent-configure-ip.sh"; recreate; }
 do_uninstall(){
   [ "$(id -u)" -eq 0 ] || { echo "请使用 sudo 运行卸载" >&2; return 1; }
   echo "即将卸载 AegisRelay 探针，这会删除：容器、systemd 域名执行器、Nginx 站点、CLI 和 $INSTALL_DIR。" >&2

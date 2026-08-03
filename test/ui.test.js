@@ -45,3 +45,12 @@ test('new-node drawer can pick a deploy agent so the created address uses that m
   assert.match(js,/populateDeployAgents/);assert.match(js,/agentId:value\('#deploy-agent'\)/);
   // create endpoint deploys onto the chosen agent so credentialsFor()/routeBaseUrl uses its domain
   assert.match(server,/deployAgentId/);assert.match(server,/deploymentId\(deployAgentId,r\.id\)/);});
+test('agent container recreate recovers from a port held by a stale container instead of going offline',()=>{const upgrade=fs.readFileSync(new URL('../scripts/agent-upgrade.sh',import.meta.url),'utf8'),install=fs.readFileSync(new URL('../scripts/agent-install.sh',import.meta.url),'utf8'),cli=fs.readFileSync(new URL('../scripts/aegis-relay-agent',import.meta.url),'utf8');
+  // --force-recreate stops the old container first, so an unrecovered "port is already allocated"
+  // failure leaves the machine with NO agent and offline in the panel. Every path that recreates the
+  // container must clean up the stale container and retry.
+  for(const [name,script] of [['agent-upgrade.sh',upgrade],['agent-install.sh',install],['aegis-relay-agent',cli]]){
+    assert.match(script,/--remove-orphans/,`${name} should prune orphan containers`);
+    assert.match(script,/docker ps -aq --filter name=aegis-relay-agent/,`${name} should find the stale container`);
+    assert.match(script,/docker rm -f \$STALE/,`${name} should force-remove the stale container`);
+  }});

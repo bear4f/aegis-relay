@@ -46,7 +46,21 @@ EOF
   systemctl enable --now aegis-relay-agent-domain.path
 fi
 cd "$INSTALL_DIR"; docker build -f Dockerfile.agent -t aegis-relay-agent:local .
-if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml up -d --force-recreate; else docker-compose -f compose.agent.yml up -d --force-recreate; fi
+compose(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
+# A plain `up -d --force-recreate` stops the old container first, so if the new one cannot bind
+# 127.0.0.1:8080 ("port is already allocated") the machine is left with NO agent running and goes
+# offline in the panel. That happens when a stale container still holds the port — most often one
+# created under the other Compose naming scheme (v1 `project_service_1` vs v2 `project-service-1`),
+# which the current Compose does not recognise as its own. Recover instead of dying: tear the project
+# down, force-remove any leftover agent container, then bring it back up. ./data is a host bind mount,
+# so the identity, snapshots and metrics all survive.
+if ! compose up -d --force-recreate --remove-orphans; then
+  echo "容器重建失败（端口可能被残留容器占用），正在清理后重试…" >&2
+  compose down --remove-orphans >/dev/null 2>&1 || true
+  STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
+  [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true
+  compose up -d --force-recreate --remove-orphans
+fi
 echo "Agent 已升级到 $SOURCE_VERSION，原注册身份、本地快照和流量统计已保留。"
 DOMAIN=$(sed -n 's/^AGENT_DOMAIN=//p' "$INSTALL_DIR/.env" | head -n1)
 EMAIL=$(sed -n 's/^AGENT_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
