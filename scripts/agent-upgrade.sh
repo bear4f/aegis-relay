@@ -78,7 +78,20 @@ agent_up(){
   if compose up -d "$@"; then return 0; fi
   free_agent_port
   if compose up -d "$@"; then return 0; fi
-  echo "仍无法启动容器。请检查端口占用：sudo ss -ltnp | grep 8080；必要时执行 sudo systemctl restart docker 后重试。" >&2
+  # Nothing holds the port any more yet Docker still refuses it: dockerd's own port reservation is
+  # stale (left behind by an unclean container teardown) and only a daemon restart clears it.
+  # Restarting Docker bounces every container on the host, so only do that automatically when this
+  # agent is the sole workload; otherwise tell the operator instead of disrupting their services.
+  if command -v systemctl >/dev/null 2>&1 && [ -z "$(docker ps -q 2>/dev/null | head -n1)" ]; then
+    echo "端口已无进程占用但 Docker 仍拒绝分配，重启 Docker 以清理陈旧端口预留…" >&2
+    systemctl restart docker || true
+    i=0; while [ "$i" -lt 30 ] && ! docker info >/dev/null 2>&1; do i=$((i+1)); sleep 1; done
+    if compose up -d "$@"; then return 0; fi
+  fi
+  echo "仍无法启动容器。请依次执行：" >&2
+  echo "  sudo ss -ltnp | grep 8080" >&2
+  echo "  sudo systemctl restart docker" >&2
+  echo "  cd $INSTALL_DIR && docker compose -f compose.agent.yml up -d" >&2
   return 1
 }
 agent_up --force-recreate --remove-orphans

@@ -59,4 +59,8 @@ test('agent container recreate recovers from a port held by a stale container in
     assert.match(script,/-host-port 8080 /,`${name} should match only port 8080 proxies`);
     assert.match(script,/-host-ip \$PUB /,`${name} should match only its own publish address`);
     assert.match(script,/systemctl restart docker/,`${name} should tell the operator the last resort`);
+    // Third cause: nothing holds the port but dockerd's own reservation is stale — only a daemon
+    // restart clears it. That bounces every container on the host, so it may only happen automatically
+    // when this agent is the sole workload; otherwise just instruct the operator.
+    assert.match(script,/docker ps -q .*\| head -n1/,`${name} should only auto-restart docker when no other container runs`);
   }});
