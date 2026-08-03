@@ -76,18 +76,39 @@ rm -f "$INSTALL_DIR/data/host-domain-status.json" "$INSTALL_DIR/data/host-domain
 } > .env
 chmod 600 .env
 compose_up(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
-# Reinstalling on a machine that already ran an agent can fail with "port is already allocated" when a
-# stale container still holds 127.0.0.1:8080 — typically one created under the other Compose naming
-# scheme (v1 `project_service_1` vs v2 `project-service-1`), which this Compose treats as foreign.
-# Clean it up and retry rather than leaving the machine with no agent. ./data is a host bind mount, so
-# the identity and cached config survive.
-if ! compose_up up -d --remove-orphans; then
-  echo "容器启动失败（端口可能被残留容器占用），正在清理后重试…" >&2
+# Docker leaks the userland `docker-proxy` process that publishes the port when a container dies
+# uncleanly; it keeps holding 8080 with NO container attached, so removing containers does not free it.
+# Only ever kill the proxy bound to this agent's own published address.
+free_agent_port(){
+  PUB=$(sed -n 's/^AGENT_PROXY_PUBLISH_IP=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -n1)
+  [ -n "$PUB" ] || PUB=127.0.0.1
+  for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+    case "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" in *docker-proxy*) ;; *) continue;; esac
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in *"-host-ip $PUB "*) ;; *) continue;; esac
+    case "$cmd" in *"-host-port 8080 "*) ;; *) continue;; esac
+    echo "清理占用 $PUB:8080 的孤儿 docker-proxy (pid $pid)" >&2
+    kill "$pid" 2>/dev/null || true
+  done
+}
+# Reinstalling on a machine that already ran an agent can fail with "port is already allocated".
+# Escalate through the two known causes instead of leaving the machine with no agent: (1) a stale
+# container the current Compose does not recognise as its own — v1 names it `project_service_1`,
+# v2 `project-service-1`; (2) a leaked docker-proxy still holding the port. ./data is a host bind
+# mount, so the identity and cached config survive every step.
+agent_up(){
+  if compose_up up -d "$@"; then return 0; fi
+  echo "容器启动失败，正在清理残留容器后重试…" >&2
   compose_up down --remove-orphans >/dev/null 2>&1 || true
   STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
   [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true
-  compose_up up -d --remove-orphans
-fi
+  if compose_up up -d "$@"; then return 0; fi
+  free_agent_port
+  if compose_up up -d "$@"; then return 0; fi
+  echo "仍无法启动容器。请检查端口占用：sudo ss -ltnp | grep 8080；必要时执行 sudo systemctl restart docker 后重试。" >&2
+  return 1
+}
+agent_up --remove-orphans
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
 install -m 0755 "$TMP_DIR/source/scripts/agent-configure-domain.sh" "$INSTALL_DIR/agent-configure-domain.sh"
 install -m 0755 "$TMP_DIR/source/scripts/agent-configure-ip.sh" "$INSTALL_DIR/agent-configure-ip.sh"
@@ -120,7 +141,7 @@ fi
 if [ "$MODE" = ip ]; then
   # IP 反代模式：配置明文 HTTP 入口，再重建容器以读取新写入的 AGENT_PROXY_MODE / AGENT_PROXY_IP。
   if "$INSTALL_DIR/agent-configure-ip.sh"; then
-    compose_up up -d --force-recreate
+    agent_up --force-recreate --remove-orphans
     echo "Agent 已同步，IP 反代模式已就绪。之后可在面板填写域名切换到 HTTPS。"
   else
     echo "Agent 已同步并监听 127.0.0.1:8080，但 IP 反代配置未完成。可执行: sudo aegis-relay-agent ip" >&2

@@ -6,17 +6,36 @@ compose(){ cd "$INSTALL_DIR"; if docker compose version >/dev/null 2>&1; then do
 do_status(){ compose ps; }
 do_logs(){ compose logs -f --tail=200; }
 do_update(){ sh -c "$(curl -fsSL https://raw.githubusercontent.com/bear4f/aegis-relay/main/scripts/agent-upgrade.sh)"; }
-# --force-recreate stops the old container first, so a "port is already allocated" failure would leave
-# the machine with no agent at all (offline in the panel). Recover by tearing down and removing any
-# stale container — usually one from the other Compose naming scheme — then start again. ./data is a
-# host bind mount, so the registered identity and cached config survive.
+# Docker leaks the userland `docker-proxy` process that publishes the port when a container dies
+# uncleanly; it keeps holding 8080 with NO container attached, so removing containers does not free it.
+# Only ever kill the proxy bound to this agent's own published address.
+free_agent_port(){
+  PUB=$(sed -n 's/^AGENT_PROXY_PUBLISH_IP=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -n1)
+  [ -n "$PUB" ] || PUB=127.0.0.1
+  for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+    case "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" in *docker-proxy*) ;; *) continue;; esac
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in *"-host-ip $PUB "*) ;; *) continue;; esac
+    case "$cmd" in *"-host-port 8080 "*) ;; *) continue;; esac
+    echo "清理占用 $PUB:8080 的孤儿 docker-proxy (pid $pid)" >&2
+    kill "$pid" 2>/dev/null || true
+  done
+}
+# --force-recreate stops the old container first, so an unrecovered "port is already allocated" would
+# leave the machine with no agent at all (offline in the panel). Escalate through the two known causes:
+# a stale container from the other Compose naming scheme, then a leaked docker-proxy holding the port.
+# ./data is a host bind mount, so the registered identity and cached config survive every step.
 recreate(){
   if compose up -d --force-recreate --remove-orphans; then return 0; fi
-  echo "容器重建失败（端口可能被残留容器占用），正在清理后重试…" >&2
+  echo "容器重建失败，正在清理残留容器后重试…" >&2
   compose down --remove-orphans >/dev/null 2>&1 || true
   STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
   [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true
-  compose up -d --force-recreate --remove-orphans
+  if compose up -d --force-recreate --remove-orphans; then return 0; fi
+  free_agent_port
+  if compose up -d --force-recreate --remove-orphans; then return 0; fi
+  echo "仍无法启动容器。请检查端口占用：sudo ss -ltnp | grep 8080；必要时执行 sudo systemctl restart docker 后重试。" >&2
+  return 1
 }
 do_domain(){ "$INSTALL_DIR/agent-configure-domain.sh" "$1" "$2"; recreate; }
 do_ip(){ "$INSTALL_DIR/agent-configure-ip.sh"; recreate; }

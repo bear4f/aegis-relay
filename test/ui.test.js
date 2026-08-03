@@ -53,4 +53,10 @@ test('agent container recreate recovers from a port held by a stale container in
     assert.match(script,/--remove-orphans/,`${name} should prune orphan containers`);
     assert.match(script,/docker ps -aq --filter name=aegis-relay-agent/,`${name} should find the stale container`);
     assert.match(script,/docker rm -f \$STALE/,`${name} should force-remove the stale container`);
+    // Removing containers does not free a leaked docker-proxy: it holds the port with no container
+    // attached, so the process itself must be reaped — scoped to this agent's own published address.
+    assert.match(script,/free_agent_port/,`${name} should reap a leaked docker-proxy`);
+    assert.match(script,/-host-port 8080 /,`${name} should match only port 8080 proxies`);
+    assert.match(script,/-host-ip \$PUB /,`${name} should match only its own publish address`);
+    assert.match(script,/systemctl restart docker/,`${name} should tell the operator the last resort`);
   }});

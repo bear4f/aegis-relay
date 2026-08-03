@@ -47,20 +47,41 @@ EOF
 fi
 cd "$INSTALL_DIR"; docker build -f Dockerfile.agent -t aegis-relay-agent:local .
 compose(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
-# A plain `up -d --force-recreate` stops the old container first, so if the new one cannot bind
-# 127.0.0.1:8080 ("port is already allocated") the machine is left with NO agent running and goes
-# offline in the panel. That happens when a stale container still holds the port — most often one
-# created under the other Compose naming scheme (v1 `project_service_1` vs v2 `project-service-1`),
-# which the current Compose does not recognise as its own. Recover instead of dying: tear the project
-# down, force-remove any leftover agent container, then bring it back up. ./data is a host bind mount,
-# so the identity, snapshots and metrics all survive.
-if ! compose up -d --force-recreate --remove-orphans; then
-  echo "容器重建失败（端口可能被残留容器占用），正在清理后重试…" >&2
+# Docker leaks the userland `docker-proxy` process that publishes the port when a container dies
+# uncleanly (OOM, dockerd crash). It keeps holding 8080 with NO container attached, so removing
+# containers does not free it — the process itself has to go. Only ever kill the proxy bound to this
+# agent's own published address, never someone else's port mapping.
+free_agent_port(){
+  PUB=$(sed -n 's/^AGENT_PROXY_PUBLISH_IP=//p' "$INSTALL_DIR/.env" 2>/dev/null | head -n1)
+  [ -n "$PUB" ] || PUB=127.0.0.1
+  for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+    case "$(readlink "/proc/$pid/exe" 2>/dev/null || true)" in *docker-proxy*) ;; *) continue;; esac
+    cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmd" in *"-host-ip $PUB "*) ;; *) continue;; esac
+    case "$cmd" in *"-host-port 8080 "*) ;; *) continue;; esac
+    echo "清理占用 $PUB:8080 的孤儿 docker-proxy (pid $pid)" >&2
+    kill "$pid" 2>/dev/null || true
+  done
+}
+# --force-recreate stops the old container first, so an unrecovered start failure leaves the machine
+# with NO agent running and offline in the panel. Escalate through the two known causes of
+# "port is already allocated" instead of dying: (1) a stale container the current Compose does not
+# recognise as its own — v1 names it `project_service_1`, v2 `project-service-1`; (2) a leaked
+# docker-proxy still holding the port. ./data is a host bind mount, so identity, snapshots and
+# metrics survive every step.
+agent_up(){
+  if compose up -d "$@"; then return 0; fi
+  echo "容器启动失败，正在清理残留容器后重试…" >&2
   compose down --remove-orphans >/dev/null 2>&1 || true
   STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
   [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true
-  compose up -d --force-recreate --remove-orphans
-fi
+  if compose up -d "$@"; then return 0; fi
+  free_agent_port
+  if compose up -d "$@"; then return 0; fi
+  echo "仍无法启动容器。请检查端口占用：sudo ss -ltnp | grep 8080；必要时执行 sudo systemctl restart docker 后重试。" >&2
+  return 1
+}
+agent_up --force-recreate --remove-orphans
 echo "Agent 已升级到 $SOURCE_VERSION，原注册身份、本地快照和流量统计已保留。"
 DOMAIN=$(sed -n 's/^AGENT_DOMAIN=//p' "$INSTALL_DIR/.env" | head -n1)
 EMAIL=$(sed -n 's/^AGENT_EMAIL=//p' "$INSTALL_DIR/.env" | head -n1)
