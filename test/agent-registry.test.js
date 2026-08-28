@@ -59,3 +59,14 @@ test("a node's client address follows the remote agent it is deployed to, not th
   // a disabled remote deployment does not hijack the address
   assert.equal(routeEntryBaseUrl({...data,deployments:[{agentId:'hk',routeId:'r1',enabled:false}]},'r1',panel),panel);
 });
+
+test('agents expose a sort order so the panel can reorder machines', () => {
+  const data={routes:[],deployments:[]};
+  assert.equal(publicAgent({id:'a',name:'HK',sortOrder:20},data).sortOrder,20);
+  // machines registered before this feature default to 0 and, because the panel sorts stably,
+  // keep their existing registration order until someone actually moves one
+  assert.equal(publicAgent({id:'b',name:'US'},data).sortOrder,0);
+  const order=[{id:'c',sortOrder:30},{id:'a',sortOrder:10},{id:'b',sortOrder:20}]
+    .map(a=>publicAgent(a,data)).sort((x,y)=>x.sortOrder-y.sortOrder).map(a=>a.id);
+  assert.deepEqual(order,['a','b','c']);
+});

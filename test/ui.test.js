@@ -76,3 +76,15 @@ test('a broken third-party APT repo cannot abort installers or entry reconfigura
   const upgrade=fs.readFileSync(new URL('../scripts/agent-upgrade.sh',import.meta.url),'utf8');
   assert.doesNotMatch(upgrade,/agent-configure-(ip|domain)\.sh[^\n]*\|\| true/,'upgrade must not silently swallow a failed entry reconfigure');
   assert.match(upgrade,/Nginx 仍沿用旧配置/,'upgrade should warn that the new Nginx tuning was not applied');});
+test('agent cards can be renamed and reordered from the panel',()=>{const js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),css=fs.readFileSync(new URL('../web/style.css',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
+  // rename: the PATCH endpoint already accepted a name, the card just had no field for it
+  assert.match(js,/class="agent-name"/);
+  assert.match(js,/JSON\.stringify\(\{name,domain,routeIds\}\)/);
+  assert.match(js,/机器名称不能为空/);
+  // reorder: buttons rather than drag, because these cards are used on phones too
+  assert.match(js,/move-up/);assert.match(js,/move-down/);
+  assert.match(js,/persistAgentOrder/);
+  assert.match(css,/\.agent-move/);
+  // server must accept and return the order, and list machines by it
+  assert.match(server,/agent\.sortOrder=numeric\(b\.sortOrder,-10000,10000\)/);
+  assert.match(server,/agentView\)\.sort\(\(a,b\)=>a\.sortOrder-b\.sortOrder\)/);});
