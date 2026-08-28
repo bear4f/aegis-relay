@@ -81,10 +81,17 @@ test('agent cards can be renamed and reordered from the panel',()=>{const js=fs.
   assert.match(js,/class="agent-name"/);
   assert.match(js,/JSON\.stringify\(\{name,domain,routeIds\}\)/);
   assert.match(js,/机器名称不能为空/);
-  // reorder: buttons rather than drag, because these cards are used on phones too
-  assert.match(js,/move-up/);assert.match(js,/move-down/);
-  assert.match(js,/persistAgentOrder/);
-  assert.match(css,/\.agent-move/);
+  // the name is edited in place on the card title, not in a separate labelled row
+  assert.match(js,/<h3><input class="agent-name"/);
+  assert.doesNotMatch(js,/<label>机器名称/);
+  // reorder: drag the card by a handle, same interaction as the node table
+  assert.match(js,/bindAgentDrag/);assert.match(js,/persistAgentOrder/);
+  assert.match(js,/dragAgentId/);
+  assert.doesNotMatch(js,/move-up|move-down/);
+  assert.match(css,/\.agent-card\.dragging/);
+  assert.match(css,/\.agent-card\.drop-above/);
+  // the status dot is drawn with h3:before, so the h3 must survive the inline input
+  assert.match(css,/\.agent-card \.node-card-head h3:before/);
   // server must accept and return the order, and list machines by it
   assert.match(server,/agent\.sortOrder=numeric\(b\.sortOrder,-10000,10000\)/);
   assert.match(server,/agentView\)\.sort\(\(a,b\)=>a\.sortOrder-b\.sortOrder\)/);});

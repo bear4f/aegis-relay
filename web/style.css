@@ -285,11 +285,6 @@ svg{stroke-linecap:round;stroke-linejoin:round}
   border-radius:var(--r-lg);box-shadow:var(--shadow-sm);transition:transform .3s var(--ease),box-shadow .3s var(--ease),border-color .3s var(--ease)}
 .node-card:hover{transform:translateY(-3px);box-shadow:var(--shadow);border-color:var(--line-2)}
 .node-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-/* 代理机器排序：按钮而非拖拽——机器卡片在手机上也要能排序，拖拽在触屏上很难用。 */
-.agent-move{display:inline-flex;gap:4px;flex-shrink:0}
-.agent-move .icon-btn{width:26px;height:26px;line-height:1;padding:0;border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--text-2);background:var(--surface)}
-.agent-move .icon-btn:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
-.agent-move .icon-btn:disabled{opacity:.35;cursor:default}
 .node-card h3{margin:0 0 5px;letter-spacing:-.01em}
 .node-path{color:var(--accent);font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
 .favorite-node{font-size:17px;line-height:1;color:var(--text-3)}
@@ -663,6 +658,17 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .agent-card[data-status="stale"] .node-card-head h3:before{background:var(--amber);box-shadow:0 0 8px rgba(191,125,38,.5)}
 .agent-card[data-status="offline"] .node-card-head h3:before,
 .agent-card[data-status="revoked"] .node-card-head h3:before{background:var(--text-3);box-shadow:none}
+/* 机器名称在标题上就地编辑：h3 保留状态圆点（h3:before），输入框只是"看不见的"标题本身 */
+.agent-card .node-card-head h3{display:flex;align-items:center;min-width:0}
+.agent-card .agent-name{flex:1;min-width:0;font:inherit;color:inherit;background:transparent;
+  border:1px solid transparent;border-radius:8px;padding:2px 6px;margin:-2px -6px}
+.agent-card .agent-name:hover{border-color:var(--line);background:var(--surface-2)}
+.agent-card .agent-name:focus{outline:none;border-color:var(--accent);background:var(--surface)}
+/* 卡片拖动排序，与节点管理一致；卡片是网格布局，用左右半边判断插入位置 */
+.agent-card .drag-handle{margin-right:2px}
+.agent-card.dragging{opacity:.45}
+.agent-card.drop-above{box-shadow:inset 3px 0 0 var(--accent)}
+.agent-card.drop-below{box-shadow:inset -3px 0 0 var(--accent)}
 .agent-editor{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
 .agent-editor>label{display:block;color:var(--text-2);font-size:12px;font-weight:600;margin-bottom:14px}
 .agent-editor>label small{display:block;color:var(--text-3);margin-top:6px;font-weight:400;line-height:1.5}
@@ -778,6 +784,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .data-table td{display:block;padding:0;border:0}
   .data-table td+td{margin-top:12px}
   .data-table .drag-handle{display:none}
+  .agent-card .drag-handle{display:none}
   .data-table .cell-name{gap:9px}
   .data-table .cell-name strong{font-size:15px;white-space:normal}
   .data-table .cell-name .node-path{font-size:12px}
