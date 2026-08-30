@@ -1,3 +1,7 @@
+# 显式声明文件格式版本：Debian 11 等自带的 docker-compose v1（1.25.x）在缺少 version 时
+# 会按远古的 version 1 格式解析，把 services 当成服务名而报错。Compose v2 会忽略此字段
+# （仅打印一条 obsolete 提示），因此写上它对新旧两边都安全。3.7 覆盖了下面用到的 init/healthcheck。
+version: "3.7"
 services:
   aegis-relay:
     build: .

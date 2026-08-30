@@ -10,6 +10,8 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" -o "$TMP_DIR/source.tar.gz"
 mkdir -p "$TMP_DIR/source"
 tar -xzf "$TMP_DIR/source.tar.gz" -C "$TMP_DIR/source" --strip-components=1
+# Keep the running machine's Compose file so an unusable new one can be rolled back.
+[ -f "$INSTALL_DIR/compose.agent.yml" ] && cp -a "$INSTALL_DIR/compose.agent.yml" "$INSTALL_DIR/compose.agent.yml.bak" || true
 cp "$TMP_DIR/source/Dockerfile.agent" "$TMP_DIR/source/compose.agent.yml" "$TMP_DIR/source/package.json" "$INSTALL_DIR/"
 rm -rf "$INSTALL_DIR/src"; cp -a "$TMP_DIR/source/src" "$INSTALL_DIR/src"
 install -m 0755 "$TMP_DIR/source/scripts/aegis-relay-agent" /usr/local/bin/aegis-relay-agent
@@ -47,6 +49,18 @@ EOF
 fi
 cd "$INSTALL_DIR"; docker build -f Dockerfile.agent -t aegis-relay-agent:local .
 compose(){ if docker compose version >/dev/null 2>&1; then docker compose -f compose.agent.yml "$@"; else docker-compose -f compose.agent.yml "$@"; fi; }
+# Parse-check the freshly downloaded Compose file BEFORE touching the running container. The recovery
+# path below force-removes agent containers to free a stuck port; if the Compose file itself cannot be
+# parsed (older docker-compose v1 on Debian 11, for instance) that recovery would destroy a perfectly
+# healthy agent and leave the machine offline with no way back. Roll back and stop instead.
+if ! compose config >/dev/null 2>&1; then
+  echo "新的 compose.agent.yml 无法被本机的 Docker Compose 解析，已回滚到原配置，正在运行的 Agent 未受影响：" >&2
+  compose config 2>&1 | sed 's/^/  /' >&2 || true
+  if [ -f "$INSTALL_DIR/compose.agent.yml.bak" ]; then mv "$INSTALL_DIR/compose.agent.yml.bak" "$INSTALL_DIR/compose.agent.yml"; fi
+  echo "请把上面的报错发给维护者；本机 Agent 仍在按原配置运行。" >&2
+  exit 1
+fi
+rm -f "$INSTALL_DIR/compose.agent.yml.bak"
 # Docker leaks the userland `docker-proxy` process that publishes the port when a container dies
 # uncleanly (OOM, dockerd crash). It keeps holding 8080 with NO container attached, so removing
 # containers does not free it — the process itself has to go. Only ever kill the proxy bound to this
@@ -70,8 +84,16 @@ free_agent_port(){
 # docker-proxy still holding the port. ./data is a host bind mount, so identity, snapshots and
 # metrics survive every step.
 agent_up(){
-  if compose up -d "$@"; then return 0; fi
-  echo "容器启动失败，正在清理残留容器后重试…" >&2
+  if ERR=$(compose up -d "$@" 2>&1); then printf '%s\n' "$ERR"; return 0; fi
+  printf '%s\n' "$ERR" >&2
+  # Removing containers is only ever the right answer for a stuck published port. Any other failure
+  # (unparseable Compose file, missing image, bad env) must leave the running container alone — the
+  # recovery below force-removes containers and would otherwise destroy a healthy agent.
+  case "$ERR" in
+    *"port is already allocated"*|*"ddress already in use"*) ;;
+    *) echo "启动失败的原因不是端口占用，已保留现有容器、不做任何清理。" >&2; return 1;;
+  esac
+  echo "端口被占用，正在清理残留容器后重试…" >&2
   compose down --remove-orphans >/dev/null 2>&1 || true
   STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
   [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true

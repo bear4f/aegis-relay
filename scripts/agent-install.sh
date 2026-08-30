@@ -99,8 +99,16 @@ free_agent_port(){
 # v2 `project-service-1`; (2) a leaked docker-proxy still holding the port. ./data is a host bind
 # mount, so the identity and cached config survive every step.
 agent_up(){
-  if compose_up up -d "$@"; then return 0; fi
-  echo "容器启动失败，正在清理残留容器后重试…" >&2
+  if ERR=$(compose_up up -d "$@" 2>&1); then printf '%s\n' "$ERR"; return 0; fi
+  printf '%s\n' "$ERR" >&2
+  # Removing containers is only ever the right answer for a stuck published port. Any other failure
+  # (unparseable Compose file, missing image, bad env) must leave the running container alone — the
+  # recovery below force-removes containers and would otherwise destroy a healthy agent.
+  case "$ERR" in
+    *"port is already allocated"*|*"ddress already in use"*) ;;
+    *) echo "启动失败的原因不是端口占用，已保留现有容器、不做任何清理。" >&2; return 1;;
+  esac
+  echo "端口被占用，正在清理残留容器后重试…" >&2
   compose_up down --remove-orphans >/dev/null 2>&1 || true
   STALE=$(docker ps -aq --filter name=aegis-relay-agent 2>/dev/null || true)
   [ -n "$STALE" ] && docker rm -f $STALE >/dev/null 2>&1 || true

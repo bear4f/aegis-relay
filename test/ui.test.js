@@ -95,3 +95,20 @@ test('agent cards can be renamed and reordered from the panel',()=>{const js=fs.
   // server must accept and return the order, and list machines by it
   assert.match(server,/agent\.sortOrder=numeric\(b\.sortOrder,-10000,10000\)/);
   assert.match(server,/agentView\)\.sort\(\(a,b\)=>a\.sortOrder-b\.sortOrder\)/);});
+test('compose files stay parseable by docker-compose v1 and a bad one can never destroy a running agent',()=>{
+  // Debian 11 ships docker-compose 1.25, which parses a file WITHOUT `version:` as the ancient v1
+  // format (top-level keys = service names) and errors out on `services:`.
+  for(const file of ['../compose.agent.yml','../compose.yml']){const yml=fs.readFileSync(new URL(file,import.meta.url),'utf8');
+    assert.match(yml,/^version: "3\.7"$/m,`${file} must declare a compose file format version`);
+    assert.match(yml,/^services:$/m,`${file} must still define services`);}
+  const upgrade=fs.readFileSync(new URL('../scripts/agent-upgrade.sh',import.meta.url),'utf8');
+  // The new compose file must be parse-checked and rolled back BEFORE any container is touched.
+  assert.match(upgrade,/compose\.agent\.yml\.bak/,'upgrade should back up the live compose file');
+  assert.match(upgrade,/if ! compose config >\/dev\/null 2>&1; then/,'upgrade should validate the new compose file');
+  assert.ok(upgrade.indexOf('compose config')<upgrade.indexOf('agent_up --force-recreate'),'validation must run before the container is recreated');
+  // Container removal is only ever correct for a stuck port; every other failure must leave the
+  // running agent alone (an unparseable compose file previously destroyed healthy agents).
+  for(const [name,file] of [['agent-upgrade.sh','../scripts/agent-upgrade.sh'],['agent-install.sh','../scripts/agent-install.sh'],['aegis-relay-agent','../scripts/aegis-relay-agent']]){
+    const script=fs.readFileSync(new URL(file,import.meta.url),'utf8');
+    assert.match(script,/\*"port is already allocated"\*\|\*"ddress already in use"\*\) ;;/,`${name} should only clean up on a port conflict`);
+    assert.match(script,/已保留现有容器、不做任何清理/,`${name} should say it kept the container`);}});
