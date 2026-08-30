@@ -12,14 +12,17 @@ services:
     cap_drop: ["ALL"]
     user: "10001:10001"
     ports:
-      - "${PROXY_PUBLISH_IP:-127.0.0.1}:8080:8080"
-      - "${ADMIN_PUBLISH_IP:-127.0.0.1}:9080:9080"
+      # 面板的发布地址会随 HTTPS 收口从 0.0.0.0 变为 127.0.0.1，因此保留变量；但不用
+      # 带默认值的插值语法（老版 docker-compose 会报 Invalid interpolation format），
+      # 安装脚本保证 .env 里始终存在这两个键。
+      - "${PROXY_PUBLISH_IP}:8080:8080"
+      - "${ADMIN_PUBLISH_IP}:9080:9080"
     volumes:
       - ./data:/app/data
     env_file: .env
     environment:
       # V8 sizes its heap off host RAM by default; cap it so the panel stays small on shared VPSes.
-      NODE_OPTIONS: --max-old-space-size=${PANEL_MAX_HEAP_MB:-256}
+      NODE_OPTIONS: --max-old-space-size=256
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9080/'+process.env.ADMIN_PATH+'/api/status').then(r=>{if(!r.ok)process.exit(1)})"]

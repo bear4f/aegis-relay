@@ -63,6 +63,12 @@ fi
 mkdir -p data
 chown -R 10001:10001 data
 chmod 700 data
+# compose.yml 用不带默认值的 ${VAR} 引用发布地址（带默认值的插值语法会让老版 docker-compose 报
+# Invalid interpolation format）。因此在启动前保证这两个键一定存在——早期版本创建的 .env 可能没有，
+# 缺失会让端口映射插值成空值。已存在的值（例如收口 HTTPS 前的 0.0.0.0）保持不变。
+ensure_env(){ grep -q "^$1=" .env || printf '%s=%s\n' "$1" "$2" >> .env; }
+ensure_env ADMIN_PUBLISH_IP 0.0.0.0
+ensure_env PROXY_PUBLISH_IP 127.0.0.1
 if docker compose version >/dev/null 2>&1; then docker compose up -d --build; else docker-compose up -d --build; fi
 install -m 0755 scripts/aegis-relay /usr/local/bin/aegis-relay
 chmod 0755 scripts/configure-domain.sh scripts/configure-local-domain.sh scripts/host-domain-apply.sh scripts/domain-wizard.sh

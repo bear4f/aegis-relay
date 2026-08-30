@@ -12,13 +12,16 @@ services:
     cap_drop: ["ALL"]
     user: "10001:10001"
     ports:
-      - "${AGENT_PROXY_PUBLISH_IP:-127.0.0.1}:8080:8080"
+      # 不使用带默认值的变量插值：部分老版本 docker-compose（Debian 11 自带 1.25.x）会报
+      # "Invalid interpolation format"。这两个值在安装/更新脚本里本来就恒为下面的常量，
+      # 写死可让 Compose 文件对任何版本都零解析风险。需要改绑定地址时直接改本文件。
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/app/agent-data
     env_file: .env
     environment:
       # V8 sizes its heap off host RAM by default; cap it so the agent stays small next to Emby traffic.
-      NODE_OPTIONS: --max-old-space-size=${AGENT_MAX_HEAP_MB:-192}
+      NODE_OPTIONS: --max-old-space-size=192
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/').then(r=>{if(!r.ok)process.exit(1)})"]

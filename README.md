@@ -54,6 +54,7 @@ https://emby.example.com/family/<访问密钥>/
 - **v0.10.15 端口自愈第三级：dockerd 陈旧端口预留**：还有一种情况是**没有任何进程占用 8080**，但 Docker 仍报 `port is already allocated`——dockerd 自身的端口预留表在容器非正常销毁后变脏，杀进程无效，只有重启 Docker 守护进程能清。自愈补上最后一级：确认端口已无进程占用后，**仅当本机没有其他容器在跑**（本探针是唯一负载）才自动 `systemctl restart docker` 并重试；机器上还有别人的容器时绝不自动重启，只打印分行的处置命令，避免影响你的其他服务。
 - **v0.10.16 第三方软件源失效不再中断安装/更新**：安装与入口配置脚本都在 `set -eu` 下裸跑 `apt-get update`，机器上任何一个失效的第三方源（如 speedtest-cli 源返回 402、GPG 过期）都会让脚本**整段中止**——更新时表现为「探针升级成功」但 **Nginx 调优被静默跳过**，机器一直沿用旧配置。现在 `apt-get update` 失败只告警并沿用现有索引继续（真正缺包时后面的 `apt-get install` 仍会明确报错），且入口重配失败会**明确提示**而不再被 `|| true` 吞掉。
 - **v0.10.19 兼容 docker-compose v1 + 更新前先验证配置**：Compose 文件补上 `version: "3.7"`——Debian 11 等自带的 docker-compose v1（1.25.x）在缺少该字段时会按远古格式解析而直接报错；Compose v2 会忽略它，对新旧两边都安全。更严重的是更新器的**自愈逻辑会误伤**：它本用于清理占用端口的残留容器，但在「Compose 文件本身无法解析」时同样会 `docker rm -f` 掉**正在健康运行**的 Agent，使机器彻底离线且无法启回。现在①更新前先备份并用 `compose config` 预检新配置，不通过就**回滚并中止，绝不触碰运行中的容器**；②清理动作只在报错确为端口占用（`port is already allocated` / `address already in use`）时才执行，其他任何失败一律保留现有容器。
+- **v0.10.20 彻底去掉 Compose 默认值插值**：有机器实测在 docker-compose 1.25 上对 `${VAR:-默认值}` 报 `Invalid interpolation format`。探针的两个变量在安装/更新脚本里本就恒为常量，因此 `compose.agent.yml` 改为**完全不含变量插值**（端口写死 `127.0.0.1:8080:8080`、堆上限写死 192），对任何 Compose 版本都零解析风险；面板的发布地址确实会随 HTTPS 收口从 `0.0.0.0` 变为 `127.0.0.1`，故保留变量但去掉默认值语法，并由安装脚本保证 `.env` 中始终存在这两个键。
 - 面向流媒体调优：DNS 结果缓存、TLS 会话恢复、256 KiB 有界背压窗口、Nginx `proxy_buffering off` + 显式转发 `Range`/`If-Range`（保证媒体按 206 分段透传、可秒开可拖动）、禁止临时文件和隐式限速、上下游 socket keepalive、无限速时零中间变换、`TCP_NODELAY`；下游产生背压时暂停上游失活检测，不会把暂停观看误判为断流
 
 **多机数据面**
