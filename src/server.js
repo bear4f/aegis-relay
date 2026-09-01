@@ -13,7 +13,7 @@ import { adminRelative, isRootAdminRequest, normalizeAdminPath } from './admin-p
 import { customConnectionKey } from './connection-key.js';
 import { isRouteAuthKey, newRouteAuthKey, ROUTE_AUTH_VERSION, routeChannels, routeTokenDigest } from './route-auth.js';
 import { LocalAgent } from './local-agent.js';
-import { deploymentId, ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgent, removeRouteDeployments, replaceAgentDeployments, routeEntryBaseUrl } from './agent-registry.js';
+import { agentEntryUrl, deploymentId, ensureLocalDeployment, LOCAL_AGENT_ID, normalizeAgentDomain, publicAgent, removeRouteDeployments, replaceAgentDeployments, routeEntryBaseUrl } from './agent-registry.js';
 import { AgentApi, enrollmentInstallCommand, issueEnrollment, normalizeCertificateEmail } from './agent-api.js';
 import { aggregateTelemetry, sanitizeTelemetry, telemetryFromMetrics } from './telemetry.js';
 import { activeLocalDomain, baseHostname, domainRequestRole, readDomainStatus, requestDomainSwitch } from './domain-control.js';
@@ -259,12 +259,16 @@ async function api(req, res, rel, cookiePath = cfg.adminPath) {
     const allowPrivate=b.allowPrivate===true, upstreams=await validateUpstreamList(b.upstreams||b.upstream,allowPrivate);
     const accessMode=b.accessMode==='alias_only'?'alias_only':'key', accessKey=accessMode==='key'?connectionKey(b.accessKey):'', now=new Date().toISOString();
     const r={id:randomToken(12),alias,name:String(b.name||alias).slice(0,80),upstreams,allowPrivate,tlsVerify:b.tlsVerify!==false,enabled:true,accessMode,showOnHome:b.showOnHome===true,clientProfile:cleanProfile(b.clientProfile),streamRewrite:cleanStreamRewrite(b.streamRewrite),tags:cleanTags(b.tags),notes:String(b.notes||'').slice(0,500),favorite:b.favorite===true,sortOrder:numeric(b.sortOrder,-10000,10000),speedLimitMbps:numeric(b.speedLimitMbps,0,100000),monthlyQuotaGB:numeric(b.monthlyQuotaGB,0,1000000),reminderDays:numeric(b.reminderDays,0,365),accessAlertThreshold:numeric(b.accessAlertThreshold,0,100000),...routeAuthFields(accessKey),createdAt:now,updatedAt:now};
-    store.data.routes.push(r);ensureLocalDeployment(store.data,r.id,now);
-    // Optionally deploy the new node onto a chosen remote agent so its shown client address uses that
-    // machine's domain right away (routeBaseUrl prefers the remote deployment). Falls back to the panel
-    // domain when no/unknown agent is picked.
-    const deployAgentId=String(b.agentId||'');
-    if(deployAgentId&&deployAgentId!==LOCAL_AGENT_ID&&store.data.agents?.some(a=>a.id===deployAgentId))store.data.deployments.push({id:deploymentId(deployAgentId,r.id),agentId:deployAgentId,routeId:r.id,enabled:true,createdAt:now,updatedAt:now});
+    store.data.routes.push(r);
+    // Deploy the new node onto exactly the machine picked in the drawer, so its shown client address
+    // uses that machine's domain (routeBaseUrl prefers the remote deployment). A panel machine used
+    // only for management must not silently pick up every new node as well — that deployment would
+    // have to be turned off by hand after every single create. The panel keeps serving the node when
+    // no agent is picked, when the picked one is unknown, or when it has no usable entry host yet
+    // (freshly enrolled, no domain/IP): without that fallback the address handed out would be dead.
+    const deployAgentId=String(b.agentId||''),deployAgent=deployAgentId&&deployAgentId!==LOCAL_AGENT_ID?store.data.agents?.find(a=>a.id===deployAgentId):null;
+    if(deployAgent)store.data.deployments.push({id:deploymentId(deployAgentId,r.id),agentId:deployAgentId,routeId:r.id,enabled:true,createdAt:now,updatedAt:now});
+    if(!deployAgent||!agentEntryUrl(deployAgent))ensureLocalDeployment(store.data,r.id,now);
     store.audit('route.created',ip(req),alias);(localAgent.reconcile(),agentApi.invalidate());return json(res,201,{route:publicRoute(r),...credentialsFor(r,accessKey)});
   }
   const agentMatch=rel.match(/^\/agents\/([^/]+)$/);if(agentMatch){const agent=store.data.agents.find(item=>item.id===agentMatch[1]);if(!agent)return json(res,404,{error:'agent not found'});

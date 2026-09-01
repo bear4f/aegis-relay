@@ -151,3 +151,19 @@ test('deploying nodes and switching the proxy domain are separate agent-card act
   assert.doesNotMatch(js,/save-agent" \$\{working\?'disabled':''\}/,'a pending domain switch must not block node deployment');
   assert.match(css,/\.agent-domain-row/);
 });
+
+// The deploy-target selector must be exclusive: if every new node were also deployed to the panel
+// machine, a management-only panel would silently re-acquire every node and the operator would have
+// to uncheck it again after every create. The panel stays as the fallback only when nothing usable
+// was picked — a remote agent with no domain/IP yet cannot serve the client address it would hand out.
+test('a picked remote agent becomes the sole deploy target for a new node',()=>{
+  const server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8'),
+        html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
+  const create=server.match(/rel === '\/routes'\) \{[\s\S]*?route\.created[^\n]*\n/);
+  assert.ok(create,'the POST /routes handler must be findable');
+  assert.match(create[0],/const deployAgentId=String\(b\.agentId\|\|''\),deployAgent=/);
+  assert.match(create[0],/if\(!deployAgent\|\|!agentEntryUrl\(deployAgent\)\)ensureLocalDeployment/);
+  assert.doesNotMatch(create[0],/routes\.push\(r\);ensureLocalDeployment/,'local must no longer be unconditional');
+  assert.match(server,/import \{ agentEntryUrl,/);
+  assert.match(html,/面板本机不会再跟着开一份/);
+});
