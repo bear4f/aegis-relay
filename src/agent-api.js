@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { b64u, randomToken, RateLimiter, requestIp, timingEqual } from './security.js';
 import { ensurePanelSigningIdentity } from './snapshot.js';
 import { compileAgentDesiredSnapshot } from './snapshot.js';
-import { normalizeAgentDomain, replaceAgentDeployments } from './agent-registry.js';
+import { LOCAL_AGENT_ID, normalizeAgentDomain, replaceAgentDeployments } from './agent-registry.js';
 import { sealAgentSnapshot } from './agent-config.js';
 import { sanitizeTelemetry } from './telemetry.js';
 
@@ -132,7 +132,21 @@ export class AgentApi {
   }
 
   // Called by the panel whenever routes, deployments or agents change.
-  invalidate() { this.epoch++;this.cache.clear();this.wake(); }
+  // The desired revision used to be recompiled lazily, on the machine's next heartbeat. Until then
+  // agent.desiredRevision still equalled appliedRevision, so a card whose node selection had just
+  // been changed reported 「配置已同步」 for up to a full heartbeat while the machine was in fact
+  // still serving the old node set — the change looked like it had silently done nothing. Recompile
+  // right here instead: it is one signature per machine, the result is what the next poll would have
+  // cached anyway, and the panel now says 「等待同步」 until the machine has actually applied it.
+  invalidate() {
+    this.epoch++;this.cache.clear();
+    for(const agent of Array.isArray(this.store.data.agents)?this.store.data.agents:[]){
+      if(agent.id===LOCAL_AGENT_ID||agent.state==='revoked')continue;
+      // A single unusable machine record must never break the change for every other machine.
+      try{ this.desired(agent); }catch{}
+    }
+    this.wake();
+  }
   wake() { for(const waiter of [...this.waiters])waiter.release('changed'); }
 
   waitForConfig(seconds) {
@@ -190,7 +204,7 @@ export class AgentApi {
         if(parsed.protocolVersion!==AGENT_PROTOCOL_VERSION)throw Object.assign(new Error('unsupported protocol version'),{status:400});
         const agent=consumeEnrollment(this.store.data,parsed.token, {...agentInput,machine:parsed.machine});
         this.store.audit('agent.enrolled',requestIp(req),agent.id);
-        return this.send(res,201,{protocolVersion:AGENT_PROTOCOL_VERSION,agentId:agent.id,panelKeyId:this.panelIdentity.keyId,panelSigningPublicKey:this.panelIdentity.publicKey,serverTime:nowSeconds(),poll:{path:'/api/agent/v1/config',maxWaitSeconds:25,heartbeatSeconds:30}},requestNonce);
+        return this.send(res,201,{protocolVersion:AGENT_PROTOCOL_VERSION,agentId:agent.id,panelKeyId:this.panelIdentity.keyId,panelSigningPublicKey:this.panelIdentity.publicKey,serverTime:nowSeconds(),poll:{path:'/api/agent/v1/config',maxWaitSeconds:25,heartbeatSeconds:10}},requestNonce);
       }
       if(req.method==='POST'&&url.pathname==='/api/agent/v1/check-in'){
         const {raw,parsed}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;
@@ -198,7 +212,17 @@ export class AgentApi {
         if(parsed.telemetry!==undefined){const telemetry=sanitizeTelemetry(parsed.telemetry);if(!telemetry)throw Object.assign(new Error('invalid agent telemetry'),{status:400,nonce:requestNonce});agent.telemetry=telemetry;agent.lastTelemetryAt=at;}
         // Heartbeat state is disposable; the panel's periodic flush persists it. Writing the whole
         // encrypted store synchronously on every check-in stalled the event loop serving playback.
-        const snapshot=this.desired(agent);delete agent.error;return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:30,agentVersion:this.version,desiredDomain:agent.desiredDomain||'',desiredMode:agent.desiredMode||'',certificateEmail:this.store.data.settings?.certificateEmail||''},requestNonce);
+        const snapshot=this.desired(agent);delete agent.error;
+        // Agents poll for config with wait=0, so a machine only learns about a change on its next
+        // heartbeat — and it is already asleep when the change happens. At a flat 30s beat a node
+        // de-selected in the panel kept being served for up to half a minute, which reads as
+        // "取消勾选没有生效". The beat is the only lever the panel has here, so keep it short enough
+        // that the wait is never mistaken for a failure. A check-in is one signature each way, so
+        // 10s costs little; a machine that still has un-applied configuration is asked back sooner
+        // still. Agents have always honoured this field (clamped to a 5s floor), so no probe update
+        // is needed, and one that keeps failing to apply backs off on its own error path.
+        const pendingConfig=snapshot.revision>Number(agent.appliedRevision||0);
+        return this.send(res,200,{protocolVersion:AGENT_PROTOCOL_VERSION,serverTime:nowSeconds(),desiredRevision:snapshot.revision,heartbeatSeconds:pendingConfig?5:10,agentVersion:this.version,desiredDomain:agent.desiredDomain||'',desiredMode:agent.desiredMode||'',certificateEmail:this.store.data.settings?.certificateEmail||''},requestNonce);
       }
       if(req.method==='GET'&&url.pathname==='/api/agent/v1/config'){
         const {raw}=await readBody(req),verified=this.verify(req,url,raw);requestNonce=verified.nonce;

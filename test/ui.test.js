@@ -167,3 +167,19 @@ test('a picked remote agent becomes the sole deploy target for a new node',()=>{
   assert.match(server,/import \{ agentEntryUrl,/);
   assert.match(html,/面板本机不会再跟着开一份/);
 });
+
+// Saving a node selection on a remote machine takes effect on that machine's next heartbeat, so the
+// card is briefly 「等待同步」. Without a follow-up poll the operator is left staring at a stale card
+// and concludes the de-selection did nothing.
+test('saving node deployment on a remote machine watches until it is applied',()=>{
+  const js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8');
+  assert.match(js,/function watchAgentSync\(\)/);
+  const save=js.match(/\.save-agent'\)\.onclick=async\(\)=>\{[\s\S]*?\};\n/);
+  assert.ok(save);
+  assert.match(save[0],/watchAgentSync\(\)/,'a remote save must poll until the machine reports in sync');
+  assert.match(save[0],/正在下发到该机器/,'the toast must say the change is still being pushed');
+  const watch=js.match(/function watchAgentSync\(\)\{[\s\S]*?\n\}/);
+  assert.ok(watch);
+  assert.match(watch[0],/!a\.inSync/);
+  assert.match(watch[0],/syncWatchUntil/,'the poll must be time-bounded, not endless');
+});

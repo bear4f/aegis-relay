@@ -212,10 +212,27 @@ function renderAgents(){
 // proxy domain field is empty (or equals the panel domain), the server rejects that with 400/409,
 // and the node selection in the same request was thrown away — so its nodes could never be turned
 // off. This handler deliberately omits `domain` so the domain validation is never reached.
-card.querySelector('.save-agent').onclick=async()=>{try{const routeIds=[...card.querySelectorAll('[data-route-id]:checked')].map(input=>input.dataset.routeId),name=card.querySelector('.agent-name').value.trim();if(!name)return toast('机器名称不能为空',true);await call(`/agents/${agent.id}`,{method:'PATCH',body:JSON.stringify({name,routeIds})});toast('代理机器配置已保存');await refreshAll();await loadAgents()}catch(e){toast(e.message,true)}};
+card.querySelector('.save-agent').onclick=async()=>{try{const routeIds=[...card.querySelectorAll('[data-route-id]:checked')].map(input=>input.dataset.routeId),name=card.querySelector('.agent-name').value.trim();if(!name)return toast('机器名称不能为空',true);await call(`/agents/${agent.id}`,{method:'PATCH',body:JSON.stringify({name,routeIds})});toast(agent.id==='local'?'代理机器配置已保存':'已保存，正在下发到该机器…');await refreshAll();await loadAgents();if(agent.id!=='local')watchAgentSync()}catch(e){toast(e.message,true)}};
 const switchDomain=card.querySelector('.switch-domain');if(switchDomain)switchDomain.onclick=async()=>{try{const domain=card.querySelector('.agent-domain').value.trim(),currentInput=agent.proxyMode==='ip'?'':(agent.domain||'');if(domain===currentInput)return toast('代理域名没有变化，无需切换');await call(`/agents/${agent.id}`,{method:'PATCH',body:JSON.stringify({domain})});toast(domain?'域名切换已提交，正在申请证书':'已提交：切换为 IP 反代（HTTP）');await refreshAll();await loadAgents();watchDomainSwitch()}catch(e){toast(e.message,true)}};
 bindAgentDrag(card,agent);const remove=card.querySelector('.delete-agent');if(remove)remove.onclick=async()=>{if(!confirm(`确认从面板删除“${agent.name}”？请先在对应机器执行卸载。`))return;try{await call(`/agents/${agent.id}`,{method:'DELETE'});toast('代理机器已从面板删除');await loadAgents()}catch(e){toast(e.message,true)}}});
   $$('.open-agent').forEach(button=>button.onclick=openAgentModal);
+}
+// A node selection is pushed to a remote machine on its next heartbeat, so the card is briefly
+// 「等待同步」 after saving. Poll until the machine has actually applied it instead of leaving a
+// stale card that makes a working change look like it did nothing.
+let syncWatchTimer=null,syncWatchUntil=0;
+function watchAgentSync(){
+  clearTimeout(syncWatchTimer);
+  if(!syncWatchUntil)syncWatchUntil=Date.now()+60000;
+  syncWatchTimer=setTimeout(async()=>{
+    try{
+      await loadAgents();
+      const pending=state.agents.some(a=>a.id!=='local'&&a.status!=='offline'&&!a.inSync);
+      if(pending&&Date.now()<syncWatchUntil){watchAgentSync();return}
+      syncWatchUntil=0;
+      if(!pending)await refreshAll();
+    }catch{if(Date.now()<syncWatchUntil)watchAgentSync();else syncWatchUntil=0}
+  },3000);
 }
 let domainWatchTimer=null;
 function watchDomainSwitch(){clearTimeout(domainWatchTimer);domainWatchTimer=setTimeout(async()=>{try{await loadAgents();const working=state.agents.some(a=>a.domainChange&&['pending','applying'].includes(a.domainChange.state));if(working){watchDomainSwitch();return}const failed=state.agents.find(a=>a.domainChange?.state==='failed');if(failed){toast(failed.domainChange.message||'切换失败',true);return}await refreshAll()}catch{watchDomainSwitch()}},4000)}

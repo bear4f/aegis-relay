@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { agentEntryUrl, ensureAgentRegistry, normalizeAgentDomain, publicAgent, replaceAgentDeployments, routeEntryBaseUrl, routesForAgent } from '../src/agent-registry.js';
 
 const routes=[
@@ -69,4 +70,63 @@ test('agents expose a sort order so the panel can reorder machines', () => {
   const order=[{id:'c',sortOrder:30},{id:'a',sortOrder:10},{id:'b',sortOrder:20}]
     .map(a=>publicAgent(a,data)).sort((x,y)=>x.sortOrder-y.sortOrder).map(a=>a.id);
   assert.deepEqual(order,['a','b','c']);
+});
+
+// A remote machine only learns about a config change on its next heartbeat, so the panel must (a) stop
+// claiming 「配置已同步」 the moment deployments change and (b) keep that heartbeat short. Without (a)
+// the card looked identical before and after de-selecting a node while the machine kept serving it —
+// the change read as "点了没反应". Regression cover for both halves.
+import { AgentApi } from '../src/agent-api.js';
+
+function fakePanel(){
+  const data={
+    routes:structuredClone(routes).map(r=>({...r,accessMode:'alias_only',upstreams:['https://emby.example.com'],enabled:true})),
+    agents:[{id:'local',name:'本地 Agent',transport:'loopback'},
+            {id:'remote-1',name:'香港探针',transport:'poll',domain:'hk.example.com',state:'active',appliedRevision:0},
+            {id:'gone',name:'已撤销',transport:'poll',state:'revoked'}],
+    deployments:[],settings:{},audit:[],controlPlane:{}
+  };
+  const store={data,save(){},audit(){}};
+  return {store,api:new AgentApi({store,version:'0.0.0-test'}),data};
+}
+
+test('changing an agent deployment immediately raises its desired revision', () => {
+  const {store,api,data}=fakePanel();
+  const remote=data.agents.find(a=>a.id==='remote-1');
+  api.invalidate();
+  const base=Number(remote.desiredRevision);
+  assert.ok(base>=1,'a registered machine must have a desired revision');
+  // the machine reports it has applied what the panel currently wants
+  remote.appliedRevision=base;
+
+  replaceAgentDeployments(store.data,'remote-1',['route-a','route-b']);
+  api.invalidate();
+  assert.ok(Number(remote.desiredRevision)>base,'adding nodes must bump the desired revision at once');
+  assert.notEqual(Number(remote.desiredRevision),Number(remote.appliedRevision),'the card must read 等待同步, not 配置已同步');
+
+  const added=Number(remote.desiredRevision);
+  remote.appliedRevision=added;
+  // the reported bug: de-selecting ONE node of several
+  replaceAgentDeployments(store.data,'remote-1',['route-a']);
+  api.invalidate();
+  assert.deepEqual(routesForAgent(store.data,'remote-1').map(r=>r.id),['route-a']);
+  assert.ok(Number(remote.desiredRevision)>added,'removing a node must bump the desired revision too');
+  assert.notEqual(Number(remote.desiredRevision),Number(remote.appliedRevision));
+});
+
+test('a revoked machine is skipped and never blocks the others', () => {
+  const {api,data}=fakePanel();
+  api.invalidate();
+  assert.equal(data.agents.find(a=>a.id==='gone').desiredRevision,undefined);
+  assert.ok(Number(data.agents.find(a=>a.id==='remote-1').desiredRevision)>=1);
+});
+
+test('a machine with un-applied configuration is asked to check back sooner', () => {
+  const source=fs.readFileSync(new URL('../src/agent-api.js',import.meta.url),'utf8');
+  const beat=source.match(/heartbeatSeconds:[^,]+/);
+  assert.ok(beat,'check-in must send a heartbeat interval');
+  assert.ok(source.includes('heartbeatSeconds:pendingConfig?5:10'),'pending config gets a 5s beat, idle machines 10s');
+  assert.match(source,/const pendingConfig=snapshot\.revision>Number\(agent\.appliedRevision\|\|0\)/);
+  // 30s was long enough that a de-selected node looked like it had not been removed at all
+  assert.doesNotMatch(source,/heartbeatSeconds:30/);
 });
