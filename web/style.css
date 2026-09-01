@@ -672,6 +672,11 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .agent-editor{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
 .agent-editor>label{display:block;color:var(--text-2);font-size:12px;font-weight:600;margin-bottom:14px}
 .agent-editor>label small{display:block;color:var(--text-3);margin-top:6px;font-weight:400;line-height:1.5}
+/* the domain input carries its own switch button: changing the proxy domain must never be bundled
+   into the button that saves the machine's name and deployed nodes */
+.agent-domain-row{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin-top:8px}
+.agent-domain-row .agent-domain{flex:1 1 170px;min-width:0;margin-top:0}
+.agent-domain-row .switch-domain{flex:0 0 auto;padding:8px 14px;font-size:11px;white-space:nowrap;box-shadow:none}
 .agent-domain{display:block;width:100%;margin-top:8px;padding:11px 14px;color:var(--text);
   background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-sm);outline:none;
   transition:.2s var(--ease);font-family:ui-monospace,Menlo,monospace;font-size:13px}

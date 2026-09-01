@@ -31,7 +31,7 @@ test('the panel installer confirms via a menu on /dev/tty before making any chan
 test('installers ensure apparmor_parser exists so docker builds on minimal AppArmor kernels',()=>{const bootstrap=fs.readFileSync(new URL('../scripts/bootstrap.sh',import.meta.url),'utf8'),agent=fs.readFileSync(new URL('../scripts/agent-install.sh',import.meta.url),'utf8');for(const s of [bootstrap,agent]){assert.match(s,/command -v apparmor_parser/);assert.match(s,/apt-get install -y apparmor/)}});
 test('a finished domain switch stops surfacing a lingering success banner',()=>{const server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');assert.match(server,/ongoingDomainChange/);assert.match(server,/change\.state==='active'&&\(!change\.currentDomain\|\|change\.currentDomain===liveEndpoint\)/)});
 test('install-time domain wizard confirms panel and proxy domains in two steps with same-domain default',()=>{const wizard=fs.readFileSync(new URL('../scripts/domain-wizard.sh',import.meta.url),'utf8'),bootstrap=fs.readFileSync(new URL('../scripts/bootstrap.sh',import.meta.url),'utf8'),cli=fs.readFileSync(new URL('../scripts/aegis-relay',import.meta.url),'utf8');assert.match(wizard,/步骤 1\/2 - 面板域名/);assert.match(wizard,/步骤 2\/2 - 本机 Emby 反代域名/);assert.match(wizard,/回车默认同面板域名/);assert.match(wizard,/PROXY_DOMAIN="\$PANEL_DOMAIN"/);assert.match(wizard,/< \/dev\/tty/);assert.match(wizard,/configure-domain\.sh/);assert.match(wizard,/configure-local-domain\.sh/);assert.match(bootstrap,/domain-wizard\.sh/);assert.match(bootstrap,/是否现在配置域名/);assert.match(cli,/domain-wizard\.sh/)});
-test('local agent domain changes use an automatic constrained host workflow and separated client origin',()=>{const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8'),js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8'),bootstrap=fs.readFileSync(new URL('../scripts/bootstrap.sh',import.meta.url),'utf8'),nginx=fs.readFileSync(new URL('../scripts/configure-local-domain.sh',import.meta.url),'utf8');assert.match(html,/面板一键切换/);assert.match(js,/保存并切换域名/);assert.match(js,/watchDomainSwitch/);assert.match(server,/requestDomainSwitch/);assert.match(server,/clientBaseUrl/);assert.match(server,/splitDomains/);assert.match(bootstrap,/aegis-relay-domain\.path/);assert.match(nginx,/控制面/);assert.match(nginx,/本地数据面/);assert.match(nginx,/旧代理域名已从 Nginx 路由移除/)});
+test('local agent domain changes use an automatic constrained host workflow and separated client origin',()=>{const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8'),js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8'),bootstrap=fs.readFileSync(new URL('../scripts/bootstrap.sh',import.meta.url),'utf8'),nginx=fs.readFileSync(new URL('../scripts/configure-local-domain.sh',import.meta.url),'utf8');assert.match(html,/面板一键切换/);assert.match(js,/切换代理域名/);assert.match(js,/watchDomainSwitch/);assert.match(server,/requestDomainSwitch/);assert.match(server,/clientBaseUrl/);assert.match(server,/splitDomains/);assert.match(bootstrap,/aegis-relay-domain\.path/);assert.match(nginx,/控制面/);assert.match(nginx,/本地数据面/);assert.match(nginx,/旧代理域名已从 Nginx 路由移除/)});
 test('the mobile menu exposes exactly the same pages, in the same order, as the desktop nav',()=>{const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');const desktop=[...(html.match(/<nav>([\s\S]*?)<\/nav>/)||['',''])[1].matchAll(/data-page="([^"]+)"/g)].map(m=>m[1]);const mobile=[...((html.match(/mobile-menu-panel">([\s\S]*?)<\/nav>/)||['',''])[1]).matchAll(/data-page="([^"]+)"/g)].map(m=>m[1]);assert.ok(desktop.length>=8,'desktop nav should list every page');assert.deepEqual(mobile,desktop);/* 移动端功能栏必须与桌面导航同步，缺一页就会出现“移动端功能栏没有同步更新” */assert.ok(desktop.includes('access'),'访问监控 must be present in both navs')});
 test('single-domain panel setup clears any stale split reverse-proxy domain, while split setup sets it',()=>{const single=fs.readFileSync(new URL('../scripts/configure-domain.sh',import.meta.url),'utf8'),split=fs.readFileSync(new URL('../scripts/configure-local-domain.sh',import.meta.url),'utf8');
   // configure-domain.sh establishes a single-domain panel, so it must clear LOCAL_PROXY_BASE_URL,
@@ -79,7 +79,7 @@ test('a broken third-party APT repo cannot abort installers or entry reconfigura
 test('agent cards can be renamed and reordered from the panel',()=>{const js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),css=fs.readFileSync(new URL('../web/style.css',import.meta.url),'utf8'),server=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
   // rename: the PATCH endpoint already accepted a name, the card just had no field for it
   assert.match(js,/class="agent-name"/);
-  assert.match(js,/JSON\.stringify\(\{name,domain,routeIds\}\)/);
+  assert.match(js,/JSON\.stringify\(\{name,routeIds\}\)/);
   assert.match(js,/机器名称不能为空/);
   // the name is edited in place on the card title, not in a separate labelled row
   assert.match(js,/<h3><input class="agent-name"/);
@@ -129,3 +129,25 @@ test('compose files avoid default-value interpolation that older docker-compose 
   const boot=fs.readFileSync(new URL('../scripts/bootstrap.sh',import.meta.url),'utf8');
   assert.match(boot,/ensure_env ADMIN_PUBLISH_IP/);assert.match(boot,/ensure_env PROXY_PUBLISH_IP/);
   assert.ok(boot.indexOf('ensure_env PROXY_PUBLISH_IP')<boot.indexOf('docker compose up -d --build'),'defaults must be ensured before compose runs');});
+
+// A management-only panel machine has no proxy domain of its own, so the request that saves its
+// deployed nodes must not carry `domain` — otherwise the server's local-agent domain validation
+// ("代理域名不能与面板域名相同" / "本机代理域名不能为空") rejects the whole PATCH and the node
+// selection is silently discarded, leaving the panel machine permanently serving every node.
+test('deploying nodes and switching the proxy domain are separate agent-card actions',()=>{
+  const js=fs.readFileSync(new URL('../web/app.js',import.meta.url),'utf8'),
+        css=fs.readFileSync(new URL('../web/style.css',import.meta.url),'utf8');
+  const save=js.match(/\.save-agent'\)\.onclick=async\(\)=>\{[\s\S]*?\};\n/);
+  assert.ok(save,'the agent card must keep a .save-agent handler');
+  assert.match(save[0],/routeIds/);
+  assert.doesNotMatch(save[0],/domain/,'saving nodes must not submit the proxy domain');
+  assert.doesNotMatch(save[0],/watchDomainSwitch/);
+  const swap=js.match(/\.switch-domain'\);if\(switchDomain\)switchDomain\.onclick=async\(\)=>\{[\s\S]*?\};\n/);
+  assert.ok(swap,'the proxy domain must have its own button');
+  assert.match(swap[0],/JSON\.stringify\(\{domain\}\)/,'the domain button submits only the domain');
+  assert.doesNotMatch(swap[0],/routeIds/);
+  assert.match(swap[0],/watchDomainSwitch/);
+  assert.match(js,/class="btn ghost switch-domain"/);
+  assert.doesNotMatch(js,/save-agent" \$\{working\?'disabled':''\}/,'a pending domain switch must not block node deployment');
+  assert.match(css,/\.agent-domain-row/);
+});
