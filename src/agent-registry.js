@@ -102,6 +102,31 @@ export function routeEntryBaseUrl(data, routeId, fallback) {
   return fallback;
 }
 
+// All available public entry endpoints for a node: includes the local agent and all deployed remote agents.
+export function routeEntryEndpoints(data, routeId, localBaseUrl) {
+  const deployments = Array.isArray(data?.deployments) ? data.deployments : [];
+  const agents = Array.isArray(data?.agents) ? data.agents : [];
+  const activeDeployments = new Map(deployments.filter(d => d.routeId === routeId && d.enabled !== false).map(d => [d.agentId, d]));
+  const endpoints = [];
+  const orderedAgents = [...agents].sort((a, b) => (Number(a.sortOrder || 0) - Number(b.sortOrder || 0)));
+  for (const agent of orderedAgents) {
+    if (!activeDeployments.has(agent.id)) continue;
+    if (agent.id === LOCAL_AGENT_ID) {
+      if (localBaseUrl) {
+        endpoints.push({ agentId: LOCAL_AGENT_ID, name: agent.name || '本地 Agent', domain: agent.domain || '', baseUrl: localBaseUrl, local: true });
+      }
+    } else {
+      const url = agentEntryUrl(agent);
+      if (url) endpoints.push({ agentId: agent.id, name: agent.name || agent.id, domain: agent.domain || '', baseUrl: url, local: false });
+    }
+  }
+  if (!endpoints.length && localBaseUrl) {
+    const localAgent = agents.find(a => a.id === LOCAL_AGENT_ID);
+    endpoints.push({ agentId: LOCAL_AGENT_ID, name: localAgent?.name || '本地 Agent', domain: localAgent?.domain || '', baseUrl: localBaseUrl, local: true });
+  }
+  return endpoints;
+}
+
 export function publicAgent(agent, data, runtime=null, now=Date.now()) {
   const local=agent.id===LOCAL_AGENT_ID,status=local?(runtime?.status||'online'):remoteAgentStatus(agent,now);
   return {

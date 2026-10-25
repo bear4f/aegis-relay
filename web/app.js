@@ -86,11 +86,20 @@ function renderPresets(){const host=$('#profile-presets');if(!host)return;host.i
 function applyPreset(p){if(p.clear){$('#profile-enabled').checked=false;for(const id of ['#profile-ua','#profile-client','#profile-device'])setValue(id,'')}else{$('#profile-enabled').checked=true;setValue('#profile-ua',p.userAgent||'');setValue('#profile-client',p.client||'');setValue('#profile-device',p.deviceName||'')}markActivePreset()}
 function markActivePreset(){const ua=value('#profile-ua'),host=$('#profile-presets');if(!host)return;host.querySelectorAll('.preset-chip').forEach(chip=>{const p=UA_PRESETS[+chip.dataset.i];chip.classList.toggle('active',!p.clear&&!!ua&&p.userAgent===ua)})}
 async function testConnection(route,row){const btn=row.querySelector('.test-node');btn.disabled=true;btn.classList.remove('good','warn','bad');btn.textContent='测试中…';try{const d=await call(`/diagnostics/${route.id}`);const p=(d.main||[])[0]||{},lat=Number(p.latencyMs),cls=!p.online?'bad':lat<300?'good':lat<800?'warn':'bad';btn.classList.add(cls);btn.textContent=p.online?(isFinite(lat)?lat+' ms':'在线'):'失败';toast(p.online?`${route.name} 在线 · ${isFinite(lat)?lat+' ms':'—'} · HTTP ${p.status||'—'}${p.embyVersion?` · Emby ${p.embyVersion}`:''}`:`${route.name} 连接失败${p.error?' · '+p.error:''}`,!p.online)}catch(e){btn.classList.add('bad');btn.textContent='失败';toast(e.message,true)}finally{btn.disabled=false}}
-function credentialText(route,data){const origin=String(data.publicBaseUrl||location.origin).replace(/\/$/,'');const full=`${origin}${data.clientPath}`;return data.accessKey?`客户端服务器地址（复制这一整行）\n${full}\n\n地址保护码（已经包含在上面的地址中，无需单独填写）\n${data.accessKey}\n\n在 Emby 客户端添加服务器时，只需粘贴完整服务器地址。`:`客户端服务器地址（复制这一整行）\n${full}\n\n此节点没有启用连接密码，知道地址的人都可以访问。`}
+function credentialText(route,data){
+  const endpoints=Array.isArray(data?.endpoints)&&data.endpoints.length?data.endpoints:[{agentId:'default',name:'默认服务器',clientUrl:String(data?.publicBaseUrl||location.origin).replace(/\/$/,'')+(data?.clientPath||`/${route.alias}/`)}];
+  const urlSection=endpoints.length>1
+    ?`客户端服务器地址（共 ${endpoints.length} 台代理机器）：\n`+endpoints.map(ep=>`【${ep.name}】\n${ep.clientUrl}`).join('\n\n')
+    :`客户端服务器地址（复制这一整行）：\n${endpoints[0].clientUrl}`;
+  return data.accessKey
+    ?`${urlSection}\n\n地址保护码（已经包含在上面的地址中，无需单独填写）：\n${data.accessKey}\n\n在 Emby 客户端添加服务器时，只需粘贴对应机器的完整服务器地址。`
+    :`${urlSection}\n\n此节点没有启用连接密码，知道地址的人都可以访问。`;
+}
 function askConnectionKey(){return prompt('输入新的连接密码（8–64 位字母、数字、下划线或连字符）。留空将安全随机生成；点击取消则不更换。','')}
-async function viewCredentials(route){try{const data=await call(`/routes/${route.id}/credentials`);if(!data.available){if(!confirm('这个节点由旧版本创建，当时没有保存可恢复的连接密码。是否现在更换密码？更换后旧客户端地址会立即失效。'))return;const custom=askConnectionKey();if(custom===null)return;const rotated=await call(`/routes/${route.id}/rotate-key`,{method:'POST',body:JSON.stringify({accessKey:custom})});showSecret(credentialText(route,rotated));return}showSecret(credentialText(route,data))}catch(e){toast(e.message,true)}}
+async function viewCredentials(route){try{const data=await call(`/routes/${route.id}/credentials`);if(!data.available){if(!confirm('这个节点由旧版本创建，当时没有保存可恢复的连接密码。是否现在更换密码？更换后旧客户端地址会立即失效。'))return;const custom=askConnectionKey();if(custom===null)return;const rotated=await call(`/routes/${route.id}/rotate-key`,{method:'POST',body:JSON.stringify({accessKey:custom})});route._credentials=null;showSecret(credentialText(route,rotated));return}showSecret(credentialText(route,data))}catch(e){toast(e.message,true)}}
 const ADDR_MASK='••••••••••••••••••';
-async function nodeUrl(r){if(r._url)return r._url;const d=await call(`/routes/${r.id}/credentials`);if(!d.available)throw new Error('该节点由旧版本创建，未保存可恢复的地址，请先“更换密码”。');r._url=String(d.publicBaseUrl||location.origin).replace(/\/$/,'')+d.clientPath;return r._url}
+async function loadRouteCredentials(r){if(r._credentials)return r._credentials;const d=await call(`/routes/${r.id}/credentials`);if(!d.available)throw new Error('该节点由旧版本创建，未保存可恢复的地址，请先“更换密码”。');r._credentials=d;return d;}
+async function nodeUrl(r,agentId=null){const d=await loadRouteCredentials(r);const eps=Array.isArray(d.endpoints)&&d.endpoints.length?d.endpoints:[{agentId:'default',name:'默认',clientUrl:String(d.publicBaseUrl||location.origin).replace(/\/$/,'')+d.clientPath}];if(agentId){const found=eps.find(x=>x.agentId===agentId);if(found)return found.clientUrl;}return eps[0].clientUrl;}
 function statusPills(r){const pills=[`<span class="pill ${r.enabled?'on':'off'}">${r.enabled?'运行中':'已停用'}</span>`,`<span class="pill ${r.accessMode==='key'?'lock':'off'}">${r.accessMode==='key'?'密钥':'公开'}</span>`];if(r.clientProfile&&r.clientProfile.enabled)pills.push(`<span class="pill disguise">伪装${r.clientProfile.client?'：'+escapeHtml(r.clientProfile.client):''}</span>`);if(r.streamRewrite&&r.streamRewrite.enabled)pills.push(`<span class="pill split">分离推流</span>`);const dn=state.dashboard&&state.dashboard.nodes&&state.dashboard.nodes.find(n=>n.id===r.id);if(dn&&dn.suspicious)pills.push(`<span class="pill danger" title="30 天内不同设备 ${dn.distinctDevices} 超过阈值（动态 IP 不计入）">⚠ 疑似被分发</span>`);return pills.concat(r.tags.map(t=>`<span class="tag">${escapeHtml(t)}</span>`)).join('')}
 const EYE_SVG='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
 function routeMatches(r,q){if(!q)return true;const hay=`${r.name} ${r.alias} ${(r.tags||[]).join(' ')}`.toLowerCase();return hay.includes(q)}
@@ -135,22 +144,51 @@ function renderRoutes(){
   const visible=state.routes.filter(r=>routeMatches(r,q));
   const body=$('#node-rows'),empty=$('#node-empty'),count=$('#node-count');
   if(count)count.innerHTML=state.routes.length?`共 <b>${state.routes.length}</b> 个节点${q?` · 匹配 <b>${visible.length}</b>`:''}`:'';
-  body.innerHTML=visible.map(r=>`<tr data-id="${r.id}">
+  body.innerHTML=visible.map(r=>{
+    const eps=Array.isArray(r.endpoints)?r.endpoints:[];
+    const addrCell=eps.length>1
+      ?`<div class="cell-addr-multi"><div class="addr-agent-bar">${eps.map((ep,idx)=>`<button type="button" class="addr-chip ${idx===0?'active':''}" data-agent-id="${escapeHtml(ep.agentId)}">${escapeHtml(ep.name)}</button>`).join('')}<button type="button" class="addr-chip copy-all" title="复制所有代理机器的地址">复制全部</button></div><div class="cell-addr"><code class="addr-text">${ADDR_MASK}</code><button class="icon-btn addr-reveal" title="显示 / 隐藏完整地址">${EYE_SVG}</button><button class="btn ghost addr-copy">复制</button></div></div>`
+      :`<div class="cell-addr"><code class="addr-text">${ADDR_MASK}</code><button class="icon-btn addr-reveal" title="显示 / 隐藏完整地址">${EYE_SVG}</button><button class="btn ghost addr-copy">复制</button></div>`;
+    return `<tr data-id="${r.id}">
     <td><div class="cell-name"><span class="drag-handle" title="${q?'搜索时无法拖动排序':'拖动调整顺序'}" ${q?'':'draggable="true"'}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg></span><button class="star ${r.favorite?'on':''}" title="置顶">${r.favorite?'★':'☆'}</button><div style="min-width:0"><strong>${escapeHtml(r.name)}</strong><span class="node-path">/${escapeHtml(r.alias)}/${r.accessMode==='key'?'••••••/':''}</span></div></div></td>
-    <td><div class="cell-addr"><code class="addr-text">${ADDR_MASK}</code><button class="icon-btn addr-reveal" title="显示 / 隐藏完整地址">${EYE_SVG}</button><button class="btn ghost addr-copy">复制</button></div></td>
+    <td>${addrCell}</td>
     <td><div class="cell-pills">${statusPills(r)}</div></td>
     <td class="cell-lines"><small class="muted">${r.upstreams.length} 上游${r.streamRewrite&&r.streamRewrite.enabled?' · 分离推流':''}<br>${r.speedLimitMbps?`${r.speedLimitMbps} Mbps`:'不限速'}</small></td>
     <td><div class="row-actions"><button class="btn ghost test-node">测试</button><button class="btn ghost edit-node">编辑</button><button class="btn ghost toggle-node">${r.enabled?'停用':'启用'}</button><button class="btn ghost rotate-node" ${r.accessMode==='alias_only'?'disabled':''}>密码</button>${r.reminderDays?'<button class="btn ghost reminder-node">已保号</button>':''}<button class="btn ghost danger delete-node">删除</button></div></td>
-  </tr>`).join('');
+  </tr>`;
+  }).join('');
   empty.innerHTML=state.routes.length?(visible.length?'':'<article class="panel empty-state"><h3>没有匹配的节点</h3><p>试着清空搜索条件。</p></article>'):'<article class="panel empty-state"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg><h3>创建第一个 Emby 节点</h3><p>只需填写名称、短路径和上游地址。</p></article>';
   body.querySelectorAll('tr').forEach(row=>{const r=state.routes.find(x=>x.id===row.dataset.id);if(!r)return;
     bindRowDrag(row,r);row.querySelector('.test-node').onclick=()=>testConnection(r,row);
-    row.querySelector('.addr-copy').onclick=async()=>{try{await navigator.clipboard.writeText(await nodeUrl(r));toast('客户端地址已复制')}catch(e){toast(e.message,true)}};
-    row.querySelector('.addr-reveal').onclick=async()=>{const el=row.querySelector('.addr-text'),wrap=row.querySelector('.cell-addr');if(el.dataset.shown){el.textContent=ADDR_MASK;el.dataset.shown='';wrap.classList.remove('shown')}else{el.textContent='加载中…';try{el.textContent=await nodeUrl(r);el.dataset.shown='1';wrap.classList.add('shown')}catch(e){el.textContent=ADDR_MASK;toast(e.message,true)}}};
+    let activeAgentId=r.endpoints&&r.endpoints[0]?r.endpoints[0].agentId:null;
+    const chips=row.querySelectorAll('.addr-chip:not(.copy-all)');
+    chips.forEach(chip=>{
+      chip.onclick=async()=>{
+        chips.forEach(c=>c.classList.remove('active'));
+        chip.classList.add('active');
+        activeAgentId=chip.dataset.agentId;
+        const el=row.querySelector('.addr-text');
+        if(el&&el.dataset.shown){try{el.textContent=await nodeUrl(r,activeAgentId)}catch(e){toast(e.message,true)}}
+      };
+    });
+    const copyAll=row.querySelector('.addr-chip.copy-all');
+    if(copyAll){
+      copyAll.onclick=async()=>{
+        try{
+          const creds=await loadRouteCredentials(r);
+          const eps=Array.isArray(creds.endpoints)&&creds.endpoints.length?creds.endpoints:[{name:'默认',clientUrl:await nodeUrl(r)}];
+          const text=eps.map(ep=>`${ep.name}：\n${ep.clientUrl}`).join('\n\n');
+          await navigator.clipboard.writeText(text);
+          toast('所有服务器地址已复制');
+        }catch(e){toast(e.message,true)}
+      };
+    }
+    row.querySelector('.addr-copy').onclick=async()=>{try{await navigator.clipboard.writeText(await nodeUrl(r,activeAgentId));toast('客户端地址已复制')}catch(e){toast(e.message,true)}};
+    row.querySelector('.addr-reveal').onclick=async()=>{const el=row.querySelector('.addr-text'),wrap=row.querySelector('.cell-addr');if(el.dataset.shown){el.textContent=ADDR_MASK;el.dataset.shown='';wrap.classList.remove('shown')}else{el.textContent='加载中…';try{el.textContent=await nodeUrl(r,activeAgentId);el.dataset.shown='1';wrap.classList.add('shown')}catch(e){el.textContent=ADDR_MASK;toast(e.message,true)}}};
     row.querySelector('.toggle-node').onclick=()=>patchRoute(r,{enabled:!r.enabled});
     row.querySelector('.star').onclick=()=>patchRoute(r,{favorite:!r.favorite});
     row.querySelector('.edit-node').onclick=()=>openDrawer(r);
-    row.querySelector('.rotate-node').onclick=async()=>{if(!confirm('更换连接密码后，所有使用旧地址的客户端会立即失效。确认继续吗？'))return;const custom=askConnectionKey();if(custom===null)return;try{const x=await call(`/routes/${r.id}/rotate-key`,{method:'POST',body:JSON.stringify({accessKey:custom})});r._url=null;showSecret(credentialText(r,x))}catch(e){toast(e.message,true)}};
+    row.querySelector('.rotate-node').onclick=async()=>{if(!confirm('更换连接密码后，所有使用旧地址的客户端会立即失效。确认继续吗？'))return;const custom=askConnectionKey();if(custom===null)return;try{const x=await call(`/routes/${r.id}/rotate-key`,{method:'POST',body:JSON.stringify({accessKey:custom})});r._url=null;r._credentials=null;showSecret(credentialText(r,x))}catch(e){toast(e.message,true)}};
     const reminder=row.querySelector('.reminder-node');if(reminder)reminder.onclick=async()=>{await call(`/routes/${r.id}/reminder-complete`,{method:'POST',body:'{}'});toast('维护提醒周期已重新开始');await refreshAll()};
     row.querySelector('.delete-node').onclick=async()=>{if(confirm(`确认删除“${r.name}”？`)){await call(`/routes/${r.id}`,{method:'DELETE'});toast('节点已删除');await refreshAll()}};
   });
@@ -313,7 +351,13 @@ async function renderChannels(route){const section=$('#channels-section'),list=$
   if(route.accessMode!=='key'){list.innerHTML='';hint.textContent='该节点是公开别名模式（无连接密码），无法区分多用户。请在上方“连接密码保护”开启后再来。';lbl.disabled=true;add.disabled=true;return;}
   lbl.disabled=false;add.disabled=false;hint.textContent='';
   try{const d=await call(`/routes/${route.id}/channels`),bu=String(d.publicBaseUrl||location.origin).replace(/\/$/,'');
-    list.innerHTML=(d.channels||[]).map(c=>`<div class="channel-row" data-cid="${escapeHtml(c.id)}"><div class="channel-info"><strong>${escapeHtml(c.label||'默认')}</strong>${c.isDefault?' <span class="pill off">默认 / 自己</span>':''}<br><code class="muted chan-url">${escapeHtml(bu+c.clientPath)}</code></div><div class="channel-actions"><button type="button" class="btn ghost copy-chan" data-url="${escapeHtml(bu+c.clientPath)}">复制链接</button>${c.isDefault?'':'<button type="button" class="btn ghost danger del-chan">删除</button>'}</div></div>`).join('');
+    list.innerHTML=(d.channels||[]).map(c=>{
+      const eps=Array.isArray(c.endpoints)&&c.endpoints.length?c.endpoints:[{agentId:'default',name:'默认',clientUrl:bu+c.clientPath}];
+      if(eps.length>1){
+        return `<div class="channel-row" data-cid="${escapeHtml(c.id)}"><div class="channel-info" style="width:100%"><strong>${escapeHtml(c.label||'默认')}</strong>${c.isDefault?' <span class="pill off">默认 / 自己</span>':''}${eps.map(ep=>`<div class="chan-url-row"><span><b>${escapeHtml(ep.name)}</b>: <code class="muted chan-url">${escapeHtml(ep.clientUrl)}</code></span><button type="button" class="btn ghost copy-chan" data-url="${escapeHtml(ep.clientUrl)}">复制</button></div>`).join('')}</div><div class="channel-actions" style="margin-top:4px">${c.isDefault?'':'<button type="button" class="btn ghost danger del-chan">删除</button>'}</div></div>`;
+      }
+      return `<div class="channel-row" data-cid="${escapeHtml(c.id)}"><div class="channel-info"><strong>${escapeHtml(c.label||'默认')}</strong>${c.isDefault?' <span class="pill off">默认 / 自己</span>':''}<br><code class="muted chan-url">${escapeHtml(eps[0].clientUrl)}</code></div><div class="channel-actions"><button type="button" class="btn ghost copy-chan" data-url="${escapeHtml(eps[0].clientUrl)}">复制链接</button>${c.isDefault?'':'<button type="button" class="btn ghost danger del-chan">删除</button>'}</div></div>`;
+    }).join('');
     list.querySelectorAll('.copy-chan').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.url);toast('专属链接已复制')}catch(e){toast(e.message,true)}});
     list.querySelectorAll('.del-chan').forEach(b=>b.onclick=async()=>{const cid=b.closest('.channel-row').dataset.cid;if(!confirm('删除该通道后，用这把密码的用户会立即无法访问（不影响其他人）。确认删除？'))return;try{await call(`/routes/${route.id}/channels/${cid}`,{method:'DELETE'});await renderChannels(route);toast('通道已删除')}catch(e){toast(e.message,true)}});
   }catch(e){list.innerHTML='';hint.textContent=e.message}}

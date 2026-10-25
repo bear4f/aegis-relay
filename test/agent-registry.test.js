@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { agentEntryUrl, ensureAgentRegistry, normalizeAgentDomain, publicAgent, replaceAgentDeployments, routeEntryBaseUrl, routesForAgent } from '../src/agent-registry.js';
+import { agentEntryUrl, ensureAgentRegistry, normalizeAgentDomain, publicAgent, replaceAgentDeployments, routeEntryBaseUrl, routeEntryEndpoints, routesForAgent } from '../src/agent-registry.js';
 
 const routes=[
   {id:'route-a',alias:'alpha',name:'Alpha'},
@@ -129,4 +129,62 @@ test('a machine with un-applied configuration is asked to check back sooner', ()
   assert.match(source,/const pendingConfig=snapshot\.revision>Number\(agent\.appliedRevision\|\|0\)/);
   // 30s was long enough that a de-selected node looked like it had not been removed at all
   assert.doesNotMatch(source,/heartbeatSeconds:30/);
+});
+
+test('routeEntryEndpoints returns all active deployed agents preserving local and remote endpoints', () => {
+  const panel = 'https://panel.example.com';
+  const data = {
+    routes: [{ id: 'r1', alias: 'emby' }],
+    agents: [
+      { id: 'local', name: '本地 Agent', sortOrder: 10 },
+      { id: 'us', name: '美国三网优化', proxyMode: 'domain', domain: 'bak.example.com', sortOrder: 20 },
+      { id: 'jp', name: '日本原生', proxyMode: 'ip', domain: '198.51.100.2', sortOrder: 30 },
+      { id: 'offline', name: '离线测试', proxyMode: 'domain', domain: 'off.example.com', sortOrder: 40 }
+    ],
+    deployments: [
+      { agentId: 'local', routeId: 'r1', enabled: true },
+      { agentId: 'us', routeId: 'r1', enabled: true },
+      { agentId: 'jp', routeId: 'r1', enabled: true },
+      { agentId: 'offline', routeId: 'r1', enabled: false }
+    ]
+  };
+
+  const endpoints = routeEntryEndpoints(data, 'r1', panel);
+  assert.equal(endpoints.length, 3);
+  assert.deepEqual(endpoints[0], {
+    agentId: 'local',
+    name: '本地 Agent',
+    domain: '',
+    baseUrl: 'https://panel.example.com',
+    local: true
+  });
+  assert.deepEqual(endpoints[1], {
+    agentId: 'us',
+    name: '美国三网优化',
+    domain: 'bak.example.com',
+    baseUrl: 'https://bak.example.com',
+    local: false
+  });
+  assert.deepEqual(endpoints[2], {
+    agentId: 'jp',
+    name: '日本原生',
+    domain: '198.51.100.2',
+    baseUrl: 'http://198.51.100.2',
+    local: false
+  });
+
+  // Channel client URLs across all deployed endpoints
+  const clientPath = '/emby/secret123/';
+  const channelUrls = endpoints.map(ep => `${ep.baseUrl.replace(/\/$/, '')}${clientPath}`);
+  assert.deepEqual(channelUrls, [
+    'https://panel.example.com/emby/secret123/',
+    'https://bak.example.com/emby/secret123/',
+    'http://198.51.100.2/emby/secret123/'
+  ]);
+
+  // Falls back to local agent if no deployments exist
+  const emptyEndpoints = routeEntryEndpoints({ ...data, deployments: [] }, 'r1', panel);
+  assert.equal(emptyEndpoints.length, 1);
+  assert.equal(emptyEndpoints[0].agentId, 'local');
+  assert.equal(emptyEndpoints[0].baseUrl, panel);
 });

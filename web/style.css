@@ -555,6 +555,18 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .cell-pills .pill,.cell-pills .tag{font-size:10px;padding:4px 9px}
 .data-table .cell-lines small{color:var(--text-3);line-height:1.5}
 /* masked access address, presented as an inset credential field with inline reveal/copy */
+.cell-addr-multi{display:flex;flex-direction:column;gap:5px;max-width:340px}
+.addr-agent-bar{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.addr-chip{padding:2px 8px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);
+  color:var(--text-2);font-size:10.5px;font-weight:600;cursor:pointer;transition:.15s;line-height:1.4}
+.addr-chip:hover{color:var(--text);background:var(--surface-2)}
+.addr-chip.active{border-color:transparent;background:var(--accent-dim);color:var(--accent)}
+.addr-chip.copy-all{margin-left:auto;border-style:dashed;color:var(--text-3)}
+.addr-chip.copy-all:hover{color:var(--accent);border-color:var(--accent)}
+.chan-url-row{display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap}
+.chan-url-row small{font-weight:600;color:var(--text-2)}
+.chan-url-row .chan-url{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chan-url-row .copy-chan{padding:3px 8px;font-size:10.5px}
 .cell-addr{display:flex;align-items:center;gap:5px;max-width:320px;
   background:var(--inset);border:1px solid var(--line);border-radius:var(--r-xs);padding:5px 6px 5px 12px;transition:border-color .15s}
 .cell-addr:hover{border-color:var(--line-2)}
@@ -793,6 +805,7 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   .data-table .cell-name{gap:9px}
   .data-table .cell-name strong{font-size:15px;white-space:normal}
   .data-table .cell-name .node-path{font-size:12px}
+  .cell-addr-multi{max-width:none}
   .cell-addr{max-width:none;background:var(--inset);border:1px solid var(--line);border-radius:var(--r-xs);padding:8px 10px}
   .cell-addr code{font-size:12px}
   .cell-pills{gap:6px}
